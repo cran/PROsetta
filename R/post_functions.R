@@ -11,7 +11,7 @@ NULL
 #' @export
 getCompleteData <- function(data, scale = NULL) {
 
-  validate_data(data)
+  validateData(data)
 
   if (is.null(scale)) {
     scale <- "combined"
@@ -76,9 +76,16 @@ getTheta <- function(
   resp_data <- resp_data[item_idx]
   ipar      <- ipar[item_idx, ]
 
-  prior <- gen_prior(theta_grid, prior_dist, prior_mean, prior_sd)
-  pp    <- prep_prob(ipar, model, theta_grid)
-  eap   <- calc_eap(theta_grid, prior, pp, resp_data)
+  if (is.vector(theta_grid)) {
+    theta_grid <- as.matrix(theta_grid)
+  }
+  prior_mu_sigma       <- list()
+  prior_mu_sigma$mu    <- prior_mean
+  prior_mu_sigma$sigma <- prior_sd ** 2
+
+  prior <- genPrior(theta_grid, prior_dist, prior_mu_sigma)
+  pp    <- getProb(ipar, model, theta_grid)
+  eap   <- getEAP(theta_grid, prior, pp, resp_data)
   eap   <- cbind(person_id, eap)
 
 
@@ -107,7 +114,7 @@ getEscore <- function(ipar, model, theta, is_minscore_0) {
 
   e <- rep(NA, length(theta))
   for (i in 1:length(theta)) {
-    e[i] <- calc_escore(ipar, model, theta[i], is_minscore_0)
+    e[i] <- getEscoreTheta(ipar, model, theta[i], is_minscore_0)
   }
   return(e)
 

@@ -4,14 +4,22 @@
 \alias{runCalibration}
 \title{Run Calibration}
 \usage{
-runCalibration(data, fixedpar = FALSE, ignore_nonconv = FALSE, ...)
+runCalibration(
+  data,
+  dimensions = 1,
+  fixedpar = FALSE,
+  ignore_nonconv = FALSE,
+  ...
+)
 }
 \arguments{
 \item{data}{a \code{\linkS4class{PROsetta_data}} object. See \code{\link{loadData}} for loading a dataset.}
 
-\item{fixedpar}{if \code{TRUE} (default), perform fixed parameter calibration using anchor data.}
+\item{dimensions}{number of dimensions to use. Must be 1 or 2. If 1, use one underlying dimension for all instruments combined. If 2, use each dimension separately for the anchor instrument and the developing instrument. Covariance between dimensions is freely estimated. (default = \code{1})}
 
-\item{ignore_nonconv}{if \code{TRUE}, return results even when calibration did not converge. Defaults to \code{FALSE}.}
+\item{fixedpar}{if \code{TRUE}, perform fixed parameter calibration using anchor data. If \code{FALSE}, perform free calibration. (default = \code{TRUE})}
+
+\item{ignore_nonconv}{if \code{TRUE}, return results even when calibration does not converge. If \code{FALSE}, raise an error when calibration does not converge. (default = \code{FALSE})}
 
 \item{...}{additional arguments to pass onto \code{\link[mirt]{mirt}} in \href{https://CRAN.R-project.org/package=mirt}{'mirt'} package.}
 }

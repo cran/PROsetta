@@ -6,8 +6,9 @@ NULL
 #' \code{\link{runCalibration}} is a function to perform item calibration on the response data.
 #'
 #' @param data a \code{\linkS4class{PROsetta_data}} object. See \code{\link{loadData}} for loading a dataset.
-#' @param fixedpar if \code{TRUE} (default), perform fixed parameter calibration using anchor data.
-#' @param ignore_nonconv if \code{TRUE}, return results even when calibration did not converge. Defaults to \code{FALSE}.
+#' @param dimensions number of dimensions to use. Must be 1 or 2. If 1, use one underlying dimension for all instruments combined. If 2, use each dimension separately for the anchor instrument and the developing instrument. Covariance between dimensions is freely estimated. (default = \code{1})
+#' @param fixedpar if \code{TRUE}, perform fixed parameter calibration using anchor data. If \code{FALSE}, perform free calibration. (default = \code{TRUE})
+#' @param ignore_nonconv if \code{TRUE}, return results even when calibration does not converge. If \code{FALSE}, raise an error when calibration does not converge. (default = \code{FALSE})
 #' @param ... additional arguments to pass onto \code{\link[mirt]{mirt}} in \href{https://CRAN.R-project.org/package=mirt}{'mirt'} package.
 #'
 #' @return \code{\link{runCalibration}} returns a \code{\linkS4class{SingleGroupClass}} object containing item calibration results.
@@ -27,40 +28,41 @@ NULL
 #' mirt::itemfit(out_calib, "S_X2", na.rm = TRUE)
 #' }
 #' @export
-runCalibration <- function(data, fixedpar = FALSE, ignore_nonconv = FALSE, ...) {
+runCalibration <- function(data, dimensions = 1, fixedpar = FALSE, ignore_nonconv = FALSE, ...) {
 
-  validate_data(data)
+  validateData(data)
 
-  resp_data <- data@response[data@itemmap[[data@item_id]]]
-  ni <- dim(resp_data)[2]
-
+  resp_data   <- getResponse(data)
+  ni          <- dim(resp_data)[2]
   message(sprintf("response data has %i items", ni))
 
   if (fixedpar) {
-
-    par_layout <- mirt::mirt(resp_data, 1, itemtype = "graded", pars = "values")
-    fixed <- which(par_layout$item %in% data@anchor[[data@item_id]])
-    ni_fixed <- length(unique(par_layout[fixed, "item"]))
-    message(sprintf("performing fixed parameter calibration, fixing %i items from anchor data", ni_fixed))
-
-    par_layout[fixed, "est"] <- FALSE
-    par_layout[which(par_layout$class == "GroupPars"), "est"] <- TRUE
-
-    for (i in fixed) {
-      item <- which(data@anchor[[data@item_id]] == par_layout$item[i])
-
-      if (substr(par_layout$name[i], 1, 1) == "a") {
-        par_layout[i, "value"] <- data@anchor[item, "a"]
-      } else {
-        k <- as.numeric(gsub("[[:alpha:]]", "", par_layout$name[i]))
-        par_layout[i, "value"] <- -data@anchor[item, "a"] * data@anchor[item, paste0("cb", k)]
-      }
-    }
-
-    calibration <- mirt::mirt(resp_data, 1, itemtype = "graded", pars = par_layout, ...)
+    message(
+      sprintf(
+        "performing %sD fixed parameter calibration, using anchor data",
+        dimensions
+      ),
+      appendLF = TRUE
+    )
+    bound_cov   <- FALSE
+    par_layout  <- getParLayout(data, dimensions, bound_cov)
+    par_layout  <- fixParLayout(par_layout, data)
+    model_specs <- getModel(data, dimensions, bound_cov)
+    calibration <- mirt::mirt(resp_data, model_specs, itemtype = "graded", pars = par_layout, ...)
   } else {
-    message("performing free calibration of all items, ignoring anchor data", appendLF = TRUE)
-    calibration <- mirt::mirt(resp_data, 1, itemtype = "graded", ...)
+    message(
+      sprintf(
+        "performing %sD free calibration of all items, ignoring anchor data",
+        dimensions
+      ),
+      appendLF = TRUE
+    )
+    # Free calibration uses standardized factors
+    # so it makes sense to bound covariance (which is just correlation here) to be below 1
+    bound_cov   <- TRUE
+    par_layout  <- getParLayout(data, dimensions, bound_cov)
+    model_specs <- getModel(data, dimensions, bound_cov)
+    calibration <- mirt::mirt(resp_data, model_specs, itemtype = "graded", pars = par_layout, ...)
   }
 
   if (calibration@OptimInfo$iter == calibration@Options$NCYCLES) {
@@ -87,6 +89,8 @@ runCalibration <- function(data, fixedpar = FALSE, ignore_nonconv = FALSE, ...) 
 #'   \item{\code{HB} for Haebara method}
 #'   \item{\code{SL} for Stocking-Lord method}
 #'   \item{\code{FIXEDPAR} for fixed parameter calibration}
+#'   \item{\code{CP} for calibrated projection using fixed parameter calibration on the anchor dimension}
+#'   \item{\code{CPLA} for linear approximation of calibrated projection. This is identical to 'CP' in \code{\link{runLinking}} but uses approximation in \code{\link{runRSSS}}}
 #' }
 #' Linear transformation methods are performed with \code{\link[plink:plink-methods]{plink}} in \href{https://CRAN.R-project.org/package=plink}{'plink'} package.
 #'
@@ -109,66 +113,90 @@ runCalibration <- function(data, fixedpar = FALSE, ignore_nonconv = FALSE, ...) 
 #' @export
 runLinking <- function(data, method, ...) {
 
-  validate_data(data)
+  validateData(data)
 
   if (is.null(data@anchor)) {
     stop("argument 'data': @anchor must be supplied for runLinking()")
   }
-  if (!method %in% c("MM", "MS", "HB", "SL", "FIXEDPAR")) {
-    stop(sprintf("argument 'method': unrecognized value '%s' (accepts 'MM', 'MS', 'HB', 'SL', 'FIXEDPAR')", method))
+  if (!method %in% c("MM", "MS", "HB", "SL", "FIXEDPAR", "CP", "CPLA")) {
+    stop(sprintf("argument 'method': unrecognized value '%s' (accepts 'MM', 'MS', 'HB', 'SL', 'FIXEDPAR', 'CP', 'CPLA')", method))
   }
 
-  if (method == "FIXEDPAR") {
+  if (method %in% c("CP", "CPLA")) {
+    dimensions  <- 2
+    do_fixedpar <- TRUE
+  } else if (method == "FIXEDPAR") {
+    dimensions  <- 1
     do_fixedpar <- TRUE
   } else {
+    dimensions  <- 1
     do_fixedpar <- FALSE
   }
 
-  calibration <- runCalibration(data, fixedpar = do_fixedpar, ...)
+  calibration <- runCalibration(data, dimensions = dimensions, fixedpar = do_fixedpar, ...)
 
-  ipar      <- mirt::coef(calibration, IRTpars = TRUE, simplify = TRUE)$items
-  ni_all    <- nrow(ipar)
-  ni_anchor <- nrow(data@anchor)
-  max_cat   <- max(get_col(data@anchor, "ncat"))
+  if (dimensions == 1) {
 
-  id_new <- data.frame(New = 1:ni_all   , ID = data@itemmap[[data@item_id]])
-  id_old <- data.frame(Old = 1:ni_anchor, ID = data@anchor[[data@item_id]])
-  common <- merge(id_new, id_old, by = "ID", sort = FALSE)[c("New", "Old")]
-  pars <- vector("list", 2)
-  pars[[1]] <- ipar
-  pars[[2]] <- data@anchor[c("a", paste0("cb", 1:(max_cat - 1)))]
+    ipar      <- mirt::coef(calibration, IRTpars = TRUE, simplify = TRUE)$items
+    ni_all    <- nrow(ipar)
+    ni_anchor <- nrow(data@anchor)
+    max_cat   <- max(getColumn(data@anchor, "ncat"))
+    id_new <- data.frame(New = 1:ni_all   , ID = data@itemmap[[data@item_id]])
+    id_old <- data.frame(Old = 1:ni_anchor, ID = data@anchor[[data@item_id]])
+    common <- merge(id_new, id_old, by = "ID", sort = FALSE)[c("New", "Old")]
+    pars <- vector("list", 2)
+    pars[[1]] <- ipar
+    pars[[2]] <- data@anchor[c("a", paste0("cb", 1:(max_cat - 1)))]
 
-  if (!do_fixedpar) {
-    message(sprintf("now performing linear transformation to match anchor with %s method", method))
-    pm_all    <- plink::as.poly.mod(ni_all   , "grm", 1:ni_all)
-    pm_anchor <- plink::as.poly.mod(ni_anchor, "grm", 1:ni_anchor)
-    ncat <- list(
-      get_col(data@itemmap, "ncat"),
-      get_col(data@anchor, "ncat")
-    )
-    plink_pars <- plink::as.irt.pars(
-      pars, common, cat = ncat,
-      list(pm_all, pm_anchor),
-      grp.names = c("From", "To")
-    )
-    out <- plink::plink(plink_pars, rescale = method, base.grp = 2)
-    out$constants <- out$link@constants[[method]]
-    out$ipar_linked <- out$pars@pars$From
-    out$ipar_anchor <- out$pars@pars$To
-  } else {
-    out <- list()
-    out$constants <- NA
-    out$ipar_linked <- pars[[1]]
-    out$ipar_anchor <- pars[[2]]
+    if (!do_fixedpar) {
+      message(sprintf("now performing linear transformation to match anchor with %s method", method))
+      pm_all    <- plink::as.poly.mod(ni_all   , "grm", 1:ni_all)
+      pm_anchor <- plink::as.poly.mod(ni_anchor, "grm", 1:ni_anchor)
+      ncat <- list(
+        getColumn(data@itemmap, "ncat"),
+        getColumn(data@anchor, "ncat")
+      )
+      plink_pars <- plink::as.irt.pars(
+        pars, common, cat = ncat,
+        list(pm_all, pm_anchor),
+        grp.names = c("From", "To")
+      )
+      out <- plink::plink(plink_pars, rescale = method, base.grp = 2)
+      out$constants <- out$link@constants[[method]]
+      out$ipar_linked <- out$pars@pars$From
+      out$ipar_anchor <- out$pars@pars$To
+    } else {
+      out <- list()
+      out$constants <- NA
+      out$ipar_linked <- pars[[1]]
+      out$ipar_anchor <- pars[[2]]
+    }
+
+    out$method      <- method
+    rownames(out$ipar_linked) <- id_new$ID
+    rownames(out$ipar_anchor) <- id_old$ID
+    colnames(out$ipar_linked) <- colnames(ipar)
+    colnames(out$ipar_anchor) <- colnames(ipar)
+
+    return(out)
+
   }
 
-  out$method                <- method
-  rownames(out$ipar_linked) <- id_new$ID
-  rownames(out$ipar_anchor) <- id_old$ID
-  colnames(out$ipar_linked) <- colnames(ipar)
-  colnames(out$ipar_anchor) <- colnames(ipar)
+  if (dimensions == 2) {
 
-  return(out)
+    pars <- mirt::coef(calibration, IRTpars = FALSE, simplify = TRUE)
+
+    out <- list()
+    out$constants   <- NA
+    out$ipar_linked <- pars$items
+    out$ipar_anchor <- getAnchorPar(data, as_AD = TRUE)
+    out$mu_sigma    <- getMuSigma(calibration)
+    out$method      <- method
+
+    return(out)
+
+  }
+
 }
 
 #' Run Test Equating
@@ -176,15 +204,15 @@ runLinking <- function(data, method, ...) {
 #' \code{\link{runEquateObserved}} is a function to perform equipercentile test equating between two scales. A concordance table is produced, mapping the observed raw scores from one scale to the scores from another scale.
 #'
 #' @param data a \code{\linkS4class{PROsetta_data}} object. See \code{\link{loadData}} for loading a dataset.
-#' @param scale_from the scale ID of the input scale. References to \code{itemmap} in \code{data} argument.
-#' @param scale_to the scale ID of the target scale to equate to. References to \code{itemmap} in \code{data} argument.
+#' @param scale_from the scale ID of the input scale. References to \code{itemmap} in \code{data} argument. (default = \code{2})
+#' @param scale_to the scale ID of the target scale to equate to. References to \code{itemmap} in \code{data} argument. (default = \code{1})
 #' @param type_to the type of score to use in the target scale frequency table. Accepts \code{raw}, \code{tscore}, and \code{theta}. \code{tscore} and \code{theta} require argument \code{rsss} to be supplied. (default = \code{raw})
 #' @param rsss the RSSS table to use to map each raw score level onto a t-score or a theta. See \code{\link{runRSSS}}.
-#' @param eq_type the type of equating to be passed onto \code{\link[equate]{equate}} in \href{https://CRAN.R-project.org/package=equate}{'equate'} package.
-#' @param smooth the type of smoothing method to be passed onto \code{\link[equate]{presmoothing}} in \href{https://CRAN.R-project.org/package=equate}{'equate'} package.
-#' @param degrees the degrees of smoothing to be passed onto \code{\link[equate]{presmoothing}}.
-#' @param boot performs bootstrapping if \code{TRUE}.
-#' @param reps the number of replications to perform in bootsrapping.
+#' @param eq_type the type of equating to be passed onto \code{\link[equate]{equate}} in \href{https://CRAN.R-project.org/package=equate}{'equate'} package. (default = \code{equipercentile})
+#' @param smooth the type of smoothing method to be passed onto \code{\link[equate]{presmoothing}} in \href{https://CRAN.R-project.org/package=equate}{'equate'} package. (default = \code{loglinear})
+#' @param degrees the degrees of smoothing to be passed onto \code{\link[equate]{presmoothing}}. (default = \code{list(3, 1)})
+#' @param boot performs bootstrapping if \code{TRUE}. (default = \code{TRUE})
+#' @param reps the number of replications to perform in bootstrapping. (default = \code{100})
 #' @param ... other arguments to pass onto \code{\link[equate]{equate}}.
 #'
 #' @return \code{\link{runEquateObserved}} returns an \code{\link{equate}} object containing the test equating result.
@@ -219,7 +247,7 @@ runLinking <- function(data, method, ...) {
 #' @export
 runEquateObserved <- function(data, scale_from = 2, scale_to = 1, type_to = "raw", rsss = NULL, eq_type = "equipercentile", smooth = "loglinear", degrees = list(3, 1), boot = TRUE, reps = 100, ...) {
 
-  validate_data(data)
+  validateData(data)
 
   message("runEquateObserved requires complete data, attempting to remove cases", appendLF = TRUE)
   data <- getCompleteData(data)
@@ -267,7 +295,7 @@ runEquateObserved <- function(data, scale_from = 2, scale_to = 1, type_to = "raw
       tmp <- merge(
         tmp, rsss[[as.character(scale_to)]],
         by.x = "total", by.y = sprintf("raw_%i", scale_to))
-      tmp <- tmp[, c("theta", "count")]
+      tmp <- tmp[, c("eap", "count")]
       freq_to <- equate::as.freqtab(tmp)
     } else {
       stop("argument 'type_to': 'theta' requires argument 'rsss' to be supplied to be able to map raw scores to theta")
@@ -298,12 +326,12 @@ runEquateObserved <- function(data, scale_from = 2, scale_to = 1, type_to = "raw
 #'
 #' @param data a \code{\linkS4class{PROsetta_data}} object. See \code{\link{loadData}} for loading a dataset.
 #' @param ipar_linked an object returned from \code{\link{runLinking}} or \code{\link{runCalibration}}.
-#' @param prior_mean prior mean.
-#' @param prior_sd prior standard deviation.
-#' @param min_theta the lower limit of theta grid.
-#' @param max_theta the upper limit of theta grid.
-#' @param inc the increment to use in theta grid.
-#' @param min_score minimum item score (0 or 1).
+#' @param prior_mean prior mean. (default = \code{0.0})
+#' @param prior_sd prior standard deviation. (default = \code{1.0})
+#' @param min_theta the lower limit of theta grid. (default = \code{-4})
+#' @param max_theta the upper limit of theta grid. (default = \code{4})
+#' @param inc the increment to use in theta grid. (default = \code{0.05})
+#' @param min_score minimum item score (0 or 1) for each scale (1, 2, and combined). If a single value is supplied, the value is applied to all scales. (default = \code{1})
 #'
 #' @return \code{\link{runRSSS}} returns a \code{\link{list}} containing crosswalk tables.
 #'
@@ -314,18 +342,53 @@ runEquateObserved <- function(data, scale_from = 2, scale_to = 1, type_to = "raw
 #' }
 #'
 #' @export
-runRSSS <- function(data, ipar_linked, prior_mean = 0.0, prior_sd = 1.0, min_theta = -4.0, max_theta = 4.0, inc = 0.01, min_score = 1) {
+runRSSS <- function(data, ipar_linked, prior_mean = 0.0, prior_sd = 1.0, min_theta = -4.0, max_theta = 4.0, inc = 0.05, min_score = 1) {
 
-  validate_data(data)
+  validateData(data)
 
   if (is.null(attr(class(ipar_linked), "package"))) {
-    item_par <- ipar_linked$ipar_linked
+
+    item_par    <- ipar_linked$ipar_linked
+    mu_sigma    <- ipar_linked$mu_sigma
+    link_method <- ipar_linked$method
+
   } else if (isS4(ipar_linked) && attr(class(ipar_linked), "package") == "mirt") {
-    item_par <- mirt::coef(ipar_linked, IRTpars = TRUE, simplify = TRUE)$items
+
+    item_par    <- mirt::coef(ipar_linked, IRTpars = FALSE, simplify = TRUE)$items
+    mu_sigma    <- getMuSigma(ipar_linked)
+    link_method <- "FREE"
+
+  }
+
+  dimensions <- detectDimensions(item_par)
+  ipar_type  <- detectParameterization(item_par)
+
+  if (dimensions == 1 & ipar_type == "ad") {
+    item_par <- convertADtoAB(item_par)
+  }
+  if (dimensions == 2 & ipar_type == "ab") {
+    item_par <- convertABtoAD(item_par)
+  }
+
+  if (link_method == "CPLA") {
+    item_par[, 1] <- rowSums(item_par[, 1:dimensions])
+    item_par <- item_par[, -2]
+    item_par <- convertADtoAB(item_par)
+    dimensions <- 1
+  }
+
+  if (dimensions == 1) {
+    prior_mu_sigma <- list()
+    prior_mu_sigma$mu    <- 0
+    prior_mu_sigma$sigma <- matrix(1, 1, 1)
+  }
+  if (dimensions == 2) {
+    prior_mu_sigma <- mu_sigma
   }
 
   item_par_by_scale <- split(data.frame(item_par), data@itemmap[[data@scale_id]])
   n_scale <- length(item_par_by_scale)
+  item_par_by_scale$combined <- item_par
 
   if (!all(min_score %in% c(0, 1))) {
     stop("argument 'min_score': must contain only 0 or 1")
@@ -338,117 +401,31 @@ runRSSS <- function(data, ipar_linked, prior_mean = 0.0, prior_sd = 1.0, min_the
     stop(sprintf("argument 'min_score': length(min_score) must be either 1 or %i", n_scale + 1))
   }
 
-  rsss <- function(ipar, is_minscore_0) {
+  theta_grid <- getThetaGrid(dimensions, min_theta, max_theta, inc)
 
-    theta_grid <- seq(min_theta, max_theta, inc)
-    pp         <- prep_prob(ipar, "grm", theta_grid)
-
-    ni   <- dim(ipar)[1]
-    nq   <- length(theta_grid)
-    ncat <- apply(ipar, 1, function(x) sum(!is.na(x)))
-
-    min_raw_score <- 0                                 # minimum obtainable raw score
-    max_raw_score <- sum(ncat) - ni                    # maximum obtainable raw score
-    raw_score     <- min_raw_score:max_raw_score       # raw scores
-    n_score       <- length(raw_score)                 # number of score levels
-    inv_tcc       <- numeric(n_score)                  # initialize TCC scoring table
-    lh            <- matrix(0, nq, n_score)            # initialize distribution of summed scores
-
-    ncat_i    <- ncat[1]
-    max_score <- 0
-    lh[, 1:ncat_i] <- pp[, 1, 1:ncat_i]
-    idx <- ncat_i
-
-    for (i in 2:ni) {
-      ncat_i    <- ncat[i]                # number of categories for item i
-      max_score <- ncat_i - 1             # maximum score for item i
-      score     <- 0:max_score            # score values for item i
-      prob      <- pp[, i, 1:ncat_i]      # category probabilities for item i
-      plh       <- matrix(0, nq, n_score) # place holder for lh
-      for (k in 1:ncat_i) {
-        for (h in 1:idx) {
-          sco <- raw_score[h] + score[k]
-          position <- which(raw_score == sco)
-          plh[, position] <- plh[, position] + lh[, h] * prob[, k]
-        }
-      }
-      idx <- idx + max_score
-      lh <- plh
-    }
-
-    theta       <- numeric(n_score) # score table for EAP
-    theta_se    <- numeric(n_score) # SE for EAP
-
-    prior       <- gen_prior(theta_grid, "normal", prior_mean, prior_sd)
-    posterior   <- lh * prior
-    den         <- colSums(posterior)
-    den         <- matrix(rep(den, rep(nq, n_score)), nq, n_score)
-    posterior   <- posterior / den
-
-    for (j in 1:n_score) {
-      theta[j] <- sum(posterior[, j] * theta_grid) / sum(posterior[, j])                         # EAP
-      theta_se[j] <- sqrt(sum(posterior[, j] * (theta_grid - theta[j])^2) / sum(posterior[, j])) # EAP
-    }
-
-    if (!is_minscore_0) {
-      raw_score <- raw_score + ni
-    }
-
-    tscore    <- round(theta    * 10 + 50, 1)
-    tscore_se <- round(theta_se * 10, 1)
-
-    rsss_table <- data.frame(
-      sum_score   = raw_score,
-      tscore      = tscore,
-      tscore_se   = tscore_se,
-      eap         = theta,
-      eap_se      = theta_se
-    )
-
-    return(rsss_table)
-  }
-
-  is_minscore_0 = F
+  # the last item_par_by_scale is the combined scale
 
   if (n_scale == 1) {
-    score_table <- rsss(item_par, min_score == 0)
+    score_table <- getRSSS(item_par_by_scale[[n_scale + 1]], theta_grid, min_score == 0, prior_mu_sigma)
     return(score_table)
   } else if (n_scale > 1) {
     score_table <- vector(mode = "list", length = n_scale + 1)
 
     for (s in 1:(n_scale + 1)) {
-      if (s != n_scale + 1) {
-        ipar <- item_par_by_scale[[s]]
-      } else {
-        ipar <- item_par
-      }
-      score_table[[s]] <- rsss(ipar, min_score[s] == 0)
+      score_table[[s]] <- getRSSS(item_par_by_scale[[s]], theta_grid, min_score[s] == 0, prior_mu_sigma)
       colnames(score_table[[s]])[1] <- sprintf("raw_%i", s)
     }
 
-    for (s in 1:(n_scale + 1)) {
-      for (d in 1:(n_scale + 1)) {
-        n_theta <- length(score_table[[s]]$eap)
-        e_theta <- rep(NA, n_theta)
-        if (d != n_scale + 1) {
-          ipar <- item_par_by_scale[[d]]
-        } else {
-          ipar <- item_par
-        }
-        for (i in 1:n_theta) {
-          e_theta[i] <- calc_escore(ipar, "grm", score_table[[s]]$eap[i], min_score[d] == 0)
-        }
-        if (d != n_scale + 1) {
-          e_name <- sprintf("escore_%i", d)
-        } else {
-          e_name <- sprintf("escore_combined")
-        }
-        score_table[[s]][[e_name]] <- e_theta
-      }
+    names(score_table) <- names(item_par_by_scale)
+
+    if (dimensions == 1 & link_method != "CPLA") {
+      score_table <- appendEscore(score_table, n_scale, item_par_by_scale, min_score)
+    }
+    if (dimensions == 1 & link_method == "CPLA") {
+      score_table <- appendCPLA(score_table, n_scale, ipar_linked$mu_sigma)
     }
 
-    names(score_table) <- c(names(item_par_by_scale), "combined")
-
     return(score_table)
+
   }
 }

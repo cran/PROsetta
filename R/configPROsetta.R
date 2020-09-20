@@ -51,6 +51,10 @@ setClass("PROsetta_data",
       msg <- sprintf("@anchor: cannot find column '%s' from @item_id", object@item_id)
       msg_all <- c(msg_all, msg)
     }
+    if (!(object@scale_id %in% names(object@itemmap))) {
+      msg <- sprintf("@itemmap: cannot find column '%s' from @scale_id", object@scale_id)
+      msg_all <- c(msg_all, msg)
+    }
     if (!is.null(object@itemmap) && !is.null(object@anchor)) {
       if (!all(object@anchor[[object@item_id]] %in% object@itemmap[[object@item_id]])) {
         msg <- sprintf("@anchor: column '%s' contains extra items not in @itemmap", object@item_id)
@@ -76,7 +80,7 @@ loadData <- function(response, itemmap, anchor,
   item_id = NULL, person_id = NULL, scale_id = NULL, input_dir = getwd()) {
 
   if (inherits(response, "character")) {
-    p <- check_fp(input_dir, response)
+    p <- checkFilePath(input_dir, response)
     if (!p$exists) stop(sprintf("argument 'response': cannot find the specified file %s", p$path))
     response <- read.csv(p$path, as.is = TRUE)
   } else if (inherits(response, "matrix")) {
@@ -86,7 +90,7 @@ loadData <- function(response, itemmap, anchor,
   }
 
   if (inherits(itemmap, "character")) {
-    p <- check_fp(input_dir, itemmap)
+    p <- checkFilePath(input_dir, itemmap)
     if (!p$exists) stop(sprintf("argument 'itemmap': cannot find the specified file %s", p$path))
     itemmap <- read.csv(p$path, as.is = TRUE)
   } else if (inherits(itemmap, "matrix")) {
@@ -96,7 +100,7 @@ loadData <- function(response, itemmap, anchor,
   }
 
   if (inherits(anchor, "character")) {
-    p <- check_fp(input_dir, anchor)
+    p <- checkFilePath(input_dir, anchor)
     if (!p$exists) stop(sprintf("argument 'anchor': cannot find the specified file %s", p$path))
     anchor <- read.csv(p$path, as.is = TRUE)
   } else if (inherits(anchor, "matrix")) {
@@ -150,6 +154,9 @@ loadData <- function(response, itemmap, anchor,
     }
 
     idx <- which((n_unique != max(n_unique)) & (n_unique != 1))[1]
+    if (is.na(idx)) {
+      idx <- which(n_unique == 1)[1]
+    }
     scale_id <- names_itemmap[idx]
     cat(sprintf("scale_id guessed as  : %s\n", scale_id))
 
@@ -184,7 +191,7 @@ loadData <- function(response, itemmap, anchor,
 #' @export
 checkFrequency <- function(data) {
 
-  validate_data(data)
+  validateData(data)
 
   tmp <- runFrequency(data, check_frequency = FALSE)
   ni <- dim(tmp)[1]
@@ -199,7 +206,7 @@ checkFrequency <- function(data) {
       if (nm > 0) {
         item_id   <- rownames(tmp[i, ])
         idx       <- which(data@itemmap[[data@item_id]] == item_id)
-        ncats_exp <- get_col(data@itemmap, "ncat")[idx]
+        ncats_exp <- getColumn(data@itemmap, "ncat")[idx]
 
         if (ncats_exp != ncats_obs) {
           cats <- colnames(tmp[i, ])
@@ -227,7 +234,7 @@ checkFrequency <- function(data) {
 #' \code{\link{runFrequency}} is a descriptive function to obtain a frequency table from the dataset.
 #'
 #' @param data a \code{\linkS4class{PROsetta_data}} object. See \code{\link{loadData}} for loading a dataset.
-#' @param check_frequency Logical. If \code{TRUE}, check the frequency table for missing response categories, and display warning message if any is missing.
+#' @param check_frequency Logical. If \code{TRUE}, check the frequency table for missing response categories, and display warning message if any is missing. (default = \code{TRUE})
 #'
 #' @return \code{\link{runFrequency}} returns a \code{\link{data.frame}} containing the frequency table.
 #'
@@ -238,10 +245,10 @@ checkFrequency <- function(data) {
 #' @export
 runFrequency <- function(data, check_frequency = TRUE) {
 
-  validate_data(data)
+  validateData(data)
 
-  tmp <- data@response[data@itemmap[[data@item_id]]]
-  tmp <- apply(tmp, 2, table)
+  resp_data <- getResponse(data)
+  tmp <- apply(resp_data, 2, table)
 
   if (inherits(tmp, "list")) {
     catnames <- sort(unique(do.call(c, lapply(tmp, names))))
@@ -279,9 +286,10 @@ runFrequency <- function(data, check_frequency = TRUE) {
 #' @export
 runDescriptive <- function(data = NULL) {
 
-  validate_data(data)
+  validateData(data)
 
-  desc      <- psych::describe(data@response[data@itemmap[[data@item_id]]])
+  resp_data <- getResponse(data)
+  desc      <- psych::describe(resp_data)
   desc$vars <- NULL
 
   return(desc)
@@ -306,7 +314,7 @@ runDescriptive <- function(data = NULL) {
 #' @export
 runClassical <- function(data, omega = FALSE, scalewise = TRUE, ...) {
 
-  validate_data(data)
+  validateData(data)
 
   out_alpha = list()
   out_omega = list()
@@ -340,9 +348,9 @@ runClassical <- function(data, omega = FALSE, scalewise = TRUE, ...) {
 #' \code{\link{runCFA}} is a function to perform a one-factor confirmatory factor analysis (CFA) to test unidimensionality.
 #'
 #' @param data a \code{\linkS4class{PROsetta_data}} object. See \code{\link{loadData}} for loading a dataset.
-#' @param estimator the estimator to be used. Passed onto \code{\link[lavaan]{cfa}} in \href{https://CRAN.R-project.org/package=lavaan}{'lavaan'} package.
-#' @param std.lv if \code{TRUE}, the metric of the latent variable is determined by fixing their (residual) variances to 1.0. If \code{FALSE}, the metric of each latent variable is determined by fixing the factor loading of the first indicator to 1.0. Passed onto \code{\link[lavaan]{cfa}}.
-#' @param scalewise if TRUE, run analysis for each scale as well as for the combined scale. If FALSE (default), run analysis only for the combined scale.
+#' @param estimator the estimator to be used. Passed onto \code{\link[lavaan]{cfa}} in \href{https://CRAN.R-project.org/package=lavaan}{'lavaan'} package. (default = \code{WLSMV})
+#' @param std.lv if \code{TRUE}, the metric of the latent variable is determined by fixing their (residual) variances to 1.0. If \code{FALSE}, the metric of each latent variable is determined by fixing the factor loading of the first indicator to 1.0. Passed onto \code{\link[lavaan]{cfa}}. (default = \code{TRUE})
+#' @param scalewise if \code{TRUE}, run analysis for each scale as well as for the combined scale. If \code{FALSE}, run analysis only for the combined scale. (default = \code{FALSE})
 #' @param ... additional arguments to pass onto \code{\link[lavaan]{cfa}}.
 #'
 #' @return \code{\link{runCFA}} returns a list containing the CFA results.
@@ -357,7 +365,7 @@ runClassical <- function(data, omega = FALSE, scalewise = TRUE, ...) {
 #' @export
 runCFA <- function(data, estimator = "WLSMV", std.lv = TRUE, scalewise = FALSE, ...) {
 
-  validate_data(data)
+  validateData(data)
 
   out <- list()
 

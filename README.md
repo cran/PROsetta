@@ -5,6 +5,8 @@
 
 [![Travis build
 status](https://travis-ci.com/choi-phd/PROsetta.svg?branch=main)](https://travis-ci.com/choi-phd/PROsetta)
+[![Number of
+downloads](https://cranlogs.r-pkg.org/badges/grand-total/PROsetta?color=lightgrey)](https://cran.r-project.org/package=PROsetta)
 <!-- badges: end -->
 
 **PROsetta** package provides functions for metric-linking of item
@@ -41,3 +43,14 @@ process of deriving equivalent scores has been used successfully in
 educational assessment to compare test scores obtained from parallel or
 alternate forms that measure the same characteristic with equal
 precision.
+
+# Installation
+
+Install the latest release from CRAN:
+
+``` r
+install.packages("PROsetta")
+```
+
+The documentation is available at
+(<https://choi-phd.github.io/PROsetta>)
