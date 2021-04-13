@@ -7,7 +7,8 @@
 runCalibration(
   data,
   dimensions = 1,
-  fixedpar = FALSE,
+  fix_method = "free",
+  fixedpar = NULL,
   ignore_nonconv = FALSE,
   ...
 )
@@ -17,7 +18,14 @@ runCalibration(
 
 \item{dimensions}{number of dimensions to use. Must be 1 or 2. If 1, use one underlying dimension for all instruments combined. If 2, use each dimension separately for the anchor instrument and the developing instrument. Covariance between dimensions is freely estimated. (default = \code{1})}
 
-\item{fixedpar}{if \code{TRUE}, perform fixed parameter calibration using anchor data. If \code{FALSE}, perform free calibration. (default = \code{TRUE})}
+\item{fix_method}{the type of constraints to impose. (default = \code{free})
+\itemize{
+  \item{\code{item} for fixed parameter calibration using anchor item parameters}
+  \item{\code{theta} for using the mean and the variance obtained from a unidimensional calibration of anchor items}
+  \item{\code{free} for free calibration}
+}}
+
+\item{fixedpar}{this argument exists for reproducibility. \code{TRUE} is equivalent to \code{fix_method = "item"}, and \code{FALSE} is equivalent to \code{fix_method = "free"}.}
 
 \item{ignore_nonconv}{if \code{TRUE}, return results even when calibration does not converge. If \code{FALSE}, raise an error when calibration does not converge. (default = \code{FALSE})}
 
