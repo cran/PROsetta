@@ -109,12 +109,14 @@ loadData <- function(response, itemmap, anchor,
     stop(sprintf("argument 'anchor': unrecognized object class %s", class(anchor)))
   }
 
+  response <- sanitizeData(response)
+  itemmap  <- sanitizeData(itemmap)
+  anchor   <- sanitizeData(anchor)
 
   colnames(itemmap) <- tolower(colnames(itemmap))
 
   names_response <- colnames(response)
   names_itemmap  <- colnames(itemmap)
-
 
   if ("reverse" %in% tolower(names_itemmap)) {
     if (any(itemmap$reverse == 1)) {
@@ -251,7 +253,8 @@ runFrequency <- function(data, check_frequency = TRUE) {
   tmp <- apply(resp_data, 2, table)
 
   if (inherits(tmp, "list")) {
-    catnames <- sort(unique(do.call(c, lapply(tmp, names))))
+    catnames <- unique(do.call(c, lapply(tmp, names)))
+    catnames <- sort(as.numeric(catnames))
     freq <- as.data.frame(matrix(NA, length(tmp), length(catnames)))
     colnames(freq) <- catnames
     rownames(freq) <- names(tmp)

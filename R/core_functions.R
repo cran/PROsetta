@@ -99,7 +99,7 @@ getAnchorPar <- function(d, as_AD) {
   idx <- c()
   for (j in 1:dim(d@anchor)[2]) {
     if (inherits(d@anchor[, j], "numeric")) {
-      if (all(d@anchor[, j] != round(d@anchor[, j]), na.rm = TRUE)) {
+      if (any(d@anchor[, j] != round(d@anchor[, j]), na.rm = TRUE)) {
         idx <- c(idx, j)
       }
     }
@@ -210,6 +210,12 @@ fixParLayout <- function(par_layout, d) {
   }
 
   ipar_anchor    <- getAnchorPar(d, as_AD = TRUE)
+  if (dimensions == 1 & (!"a1" %in% names(ipar_anchor))) {
+    # if using a 1D model and the anchor dimension is not 1
+    a_par_name <- sprintf("a%s", getAnchorDimension(d))
+    a_par_idx  <- which(names(ipar_anchor) == a_par_name)
+    names(ipar_anchor)[a_par_idx] <- "a1"
+  }
   par_to_fix     <- which(par_layout$item %in% rownames(ipar_anchor))
   n_items_to_fix <- length(unique(par_layout$item[par_to_fix]))
   par_layout$est[par_to_fix] <- FALSE
@@ -414,7 +420,7 @@ getProb <- function(ipar, model, theta_grid) {
     # a/b parameterization
     if (p_type == "ab") {
       par_a <- ipar[, 1:dimensions]
-      par_b <- ipar[, dimensions + 1:(max_cat - 1)]
+      par_b <- ipar[, dimensions + 1:(max_cat - 1), drop = FALSE]
     }
 
     pp <- list()
@@ -812,4 +818,14 @@ appendCPLA <- function(score_table, n_scale, mu_sigma) {
 
   return(score_table)
 
+}
+
+#' @noRd
+sanitizeData <- function(x) {
+  for (v in colnames(x)) {
+    if (inherits(x[[v]], "factor")) {
+      x[[v]] <- as.character(x[[v]])
+    }
+  }
+  return(x)
 }
