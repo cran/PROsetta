@@ -1,8 +1,8 @@
 Package: PROsetta
 Type: Package
 Title: Linking Patient-Reported Outcomes Measures
-Version: 0.3.2
-Date: 2021-07-19
+Version: 0.3.4
+Date: 2021-11-23
 Authors@R: c(
     person("Seung W.", "Choi",
         email = "schoi@austin.utexas.edu",
@@ -23,7 +23,7 @@ Authors@R: c(
         role = c("ctb")))
 Description: Perform scale linking to establish relationships between instruments
     that measure similar constructs according to the PROsetta Stone methodology, as in Choi, Schalet, Cook, & Cella (2014) <doi:10.1037/a0035768>.
-URL: http://prosettastone.org (project description),
+URL: https://www.prosettastone.org/ (project description),
         https://choi-phd.github.io/PROsetta/ (documentation)
 BugReports: https://github.com/choi-phd/PROsetta/issues
 Imports: equate, lavaan, mirt, plink, psych, methods, mvnfast
@@ -33,14 +33,14 @@ Suggests: shiny, shinythemes, shinyWidgets, shinyjs, DT, knitr,
 License: GPL-3
 Encoding: UTF-8
 LazyData: true
-RoxygenNote: 7.1.1
+RoxygenNote: 7.1.2
 VignetteBuilder: knitr
 Collate: 'import.R' 'configPROsetta.R' 'post_functions.R'
         'core_functions.R' 'datasets.R' 'example.R'
         'helper_functions.R' 'linking_functions.R' 'plot_functions.R'
         'runshiny.R'
 NeedsCompilation: no
-Packaged: 2021-07-20 13:50:48 UTC; chois1
+Packaged: 2021-11-23 20:36:02 UTC; chois1
 Author: Seung W. Choi [aut, cre] (<https://orcid.org/0000-0003-4777-5420>),
   Sangdon Lim [aut] (<https://orcid.org/0000-0002-2988-014X>),
   Benjamin D. Schalet [ctb],
@@ -48,4 +48,4 @@ Author: Seung W. Choi [aut, cre] (<https://orcid.org/0000-0003-4777-5420>),
   David Cella [ctb]
 Maintainer: Seung W. Choi <schoi@austin.utexas.edu>
 Repository: CRAN
-Date/Publication: 2021-07-20 15:50:05 UTC
+Date/Publication: 2021-11-23 23:20:18 UTC
