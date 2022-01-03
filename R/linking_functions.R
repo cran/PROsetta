@@ -15,6 +15,7 @@ NULL
 #' }
 #' @param fixedpar this argument exists for reproducibility. \code{TRUE} is equivalent to \code{fix_method = "item"}, and \code{FALSE} is equivalent to \code{fix_method = "free"}.
 #' @param ignore_nonconv if \code{TRUE}, return results even when calibration does not converge. If \code{FALSE}, raise an error when calibration does not converge. (default = \code{FALSE})
+#' @param verbose if \code{TRUE}, print status messages. (default = \code{FALSE})
 #' @param ... additional arguments to pass onto \code{\link[mirt]{mirt}} in \href{https://CRAN.R-project.org/package=mirt}{'mirt'} package.
 #'
 #' @return \code{\link{runCalibration}} returns a \code{\linkS4class{SingleGroupClass}} object containing item calibration results.
@@ -34,7 +35,12 @@ NULL
 #' mirt::itemfit(out_calib, "S_X2", na.rm = TRUE)
 #' }
 #' @export
-runCalibration <- function(data, dimensions = 1, fix_method = "free", fixedpar = NULL, ignore_nonconv = FALSE, ...) {
+runCalibration <- function(
+  data, dimensions = 1,
+  fix_method = "free", fixedpar = NULL,
+  ignore_nonconv = FALSE,
+  verbose = FALSE,
+  ...) {
 
   if (!missing("fixedpar")){
     if (fixedpar == TRUE) {
@@ -49,30 +55,40 @@ runCalibration <- function(data, dimensions = 1, fix_method = "free", fixedpar =
 
   resp_data   <- getResponse(data)
   ni          <- dim(resp_data)[2]
-  message(sprintf("response data has %i items", ni))
+  n_obs       <- dim(resp_data)[1]
+  printLog(
+    "validation",
+    sprintf("response data has %s items * %s observations", ni, n_obs),
+    verbose
+  )
 
   if (toupper(fix_method) == "ITEM") {
-    message(
+
+    printLog(
+      "config",
       sprintf(
         "performing %sD fixed parameter calibration, using anchor data",
         dimensions
       ),
-      appendLF = TRUE
+      verbose
     )
+
     bound_cov   <- FALSE
     par_layout  <- getParLayout(data, dimensions, bound_cov)
-    par_layout  <- fixParLayout(par_layout, data)
+    par_layout  <- fixParLayout(par_layout, data, verbose)
     model_specs <- getModel(data, dimensions, bound_cov)
     calibration <- mirt::mirt(resp_data, model_specs, itemtype = "graded", pars = par_layout, ...)
+
   } else if (toupper(fix_method) == "THETA") {
 
-    message(rep("-", options()$width))
-    message(
+    anchor_dim <- getAnchorDimension(data)
+    printLog(
+      "CPFIXEDDIM",
       sprintf(
-        "performing 1D fixed parameter calibration of anchor instrument, using anchor data",
-        dimensions
+        "first obtain mean(theta_%s) and var(theta_%s)",
+        anchor_dim, anchor_dim
       ),
-      appendLF = TRUE
+      verbose
     )
 
     # Step 1. Perform 1D calibration on anchor data only, constraining item parameters to anchor values
@@ -84,10 +100,18 @@ runCalibration <- function(data, dimensions = 1, fix_method = "free", fixedpar =
       data_anchor@itemmap,
       data_anchor@itemmap$item_id %in% getItemNames(data_anchor, scale_id = anchor_dim)
     )
-    calibration_1d <- runCalibration(data_anchor, dimensions = 1, fix_method = "ITEM")
-    calibration_1d_pars <- mirt::coef(calibration_1d, IRTpars = FALSE, simplify = TRUE)
-    message(sprintf("latent mean    : %s", calibration_1d_pars$means))
-    message(sprintf("latent variance: %s", calibration_1d_pars$cov))
+    linked_parameters_1d <- runLinking(data_anchor, method = "FIXEDPAR")
+
+    printLog(
+      "CPFIXEDDIM",
+      sprintf("mean(theta_%s) : %s", anchor_dim, linked_parameters_1d$mu_sigma$mu),
+      verbose
+    )
+    printLog(
+      "CPFIXEDDIM",
+      sprintf("var(theta_%s)  : %s", anchor_dim, linked_parameters_1d$mu_sigma$sigma),
+      verbose
+    )
 
     # Step 2. Constrain anchor dimension using 1D results
     par_layout <- getParLayout(data, dimensions, bound_cov = FALSE)
@@ -96,36 +120,44 @@ runCalibration <- function(data, dimensions = 1, fix_method = "free", fixedpar =
       par_layout$class == "GroupPars" &
       par_layout$name == sprintf("MEAN_%s", anchor_dim)
     )
-    par_layout[idx_mean, ]$value <- calibration_1d_pars$means
+    par_layout[idx_mean, ]$value <- linked_parameters_1d$mu_sigma$mu
     par_layout[idx_mean, ]$est   <- FALSE
     idx_var <- which(
       par_layout$class == "GroupPars" &
       par_layout$name == sprintf("COV_%s%s", anchor_dim, anchor_dim)
     )
-    par_layout[idx_var, ]$value  <- calibration_1d_pars$cov
+    par_layout[idx_var, ]$value  <- linked_parameters_1d$mu_sigma$sigma
     par_layout[idx_var, ]$est    <- FALSE
 
-    message(rep("-", options()$width))
+    printLog(
+      "CPFIXEDDIM",
+      sprintf(
+        "mean(theta_%s) and var(theta_%s) applied as constraints",
+        anchor_dim, anchor_dim
+      ),
+      verbose
+    )
 
     # Step 3. Fit a 2D model
-    message(
+    printLog(
+      "CPFIXEDDIM",
       sprintf(
-        "performing %sD free calibration of all items, using the obtained anchor mean and variance",
+        "performing %sD free calibration of all items, using theta constraints",
         dimensions
       ),
-      appendLF = TRUE
+      verbose
     )
     model_specs <- getModel(data, dimensions, bound_cov = FALSE)
     calibration <- mirt::mirt(resp_data, model_specs, itemtype = "graded", pars = par_layout, ...)
 
   } else if (toupper(fix_method) == "FREE") {
-    message(
-      sprintf(
-        "performing %sD free calibration of all items, ignoring anchor data",
-        dimensions
-      ),
-      appendLF = TRUE
+
+    printLog(
+      "config",
+      sprintf("performing %sD free calibration of all items, ignoring anchor data", dimensions),
+      verbose
     )
+
     # Free calibration uses standardized factors
     # so it makes sense to bound covariance (which is just correlation here) to be below 1
     bound_cov   <- TRUE
@@ -135,7 +167,7 @@ runCalibration <- function(data, dimensions = 1, fix_method = "free", fixedpar =
   }
 
   if (calibration@OptimInfo$iter == calibration@Options$NCYCLES) {
-    msg = sprintf("calibration did not converge: increase iteration limit by adjusting the 'technical' argument, e.g., technical = list(NCYCLES = %i)", calibration@Options$NCYCLES + 500)
+    msg <- sprintf("calibration did not converge: increase iteration limit by adjusting the 'technical' argument, e.g., technical = list(NCYCLES = %i)", calibration@Options$NCYCLES + 500)
     if (ignore_nonconv) {
       warning(msg)
     } else {
@@ -164,6 +196,7 @@ runCalibration <- function(data, dimensions = 1, fix_method = "free", fixedpar =
 #' }
 #' Linear transformation methods are performed with \code{\link[plink:plink-methods]{plink}} in \href{https://CRAN.R-project.org/package=plink}{'plink'} package.
 #'
+#' @param verbose if \code{TRUE}, print status messages. (default = \code{FALSE})
 #' @param ... additional arguments to pass onto \code{\link[mirt]{mirt}} in \href{https://CRAN.R-project.org/package=mirt}{'mirt'} package.
 #'
 #' @return \code{\link{runLinking}} returns a \code{\link{list}} containing the scale linking results.
@@ -181,7 +214,7 @@ runCalibration <- function(data, dimensions = 1, fix_method = "free", fixedpar =
 #' out_link$ipar_linked # item parameters linked to anchor
 #' }
 #' @export
-runLinking <- function(data, method, ...) {
+runLinking <- function(data, method, verbose = FALSE, ...) {
 
   validateData(data)
 
@@ -206,11 +239,12 @@ runLinking <- function(data, method, ...) {
     fix_method <- "free"
   }
 
-  calibration <- runCalibration(data, dimensions = dimensions, fix_method = fix_method, ...)
+  calibration <- runCalibration(data, dimensions = dimensions, fix_method = fix_method, verbose = verbose, ...)
 
   if (dimensions == 1) {
 
-    ipar      <- mirt::coef(calibration, IRTpars = TRUE, simplify = TRUE)$items
+    fit       <- mirt::coef(calibration, IRTpars = TRUE, simplify = TRUE)
+    ipar      <- fit$items
     ni_all    <- nrow(ipar)
     ni_anchor <- nrow(data@anchor)
     max_cat   <- max(getColumn(data@anchor, "ncat"))
@@ -222,7 +256,16 @@ runLinking <- function(data, method, ...) {
     pars[[2]] <- data@anchor[c("a", paste0("cb", 1:(max_cat - 1)))]
 
     if (fix_method == "free") {
-      message(sprintf("now performing linear transformation to match anchor with %s method", method))
+      printLog(
+        "metric",
+        "applying linear transformation on item parameters to match the metric of anchor data parameters",
+        verbose
+      )
+      printLog(
+        "metric",
+        sprintf("linear transformation method is %s", method),
+        verbose
+      )
       pm_all    <- plink::as.poly.mod(ni_all   , "grm", 1:ni_all)
       pm_anchor <- plink::as.poly.mod(ni_anchor, "grm", 1:ni_anchor)
       ncat <- list(
@@ -243,6 +286,7 @@ runLinking <- function(data, method, ...) {
       out$constants <- NA
       out$ipar_linked <- pars[[1]]
       out$ipar_anchor <- pars[[2]]
+      out$mu_sigma    <- getMuSigma(calibration)
     }
 
     out$method      <- method
@@ -286,6 +330,7 @@ runLinking <- function(data, method, ...) {
 #' @param degrees the degrees of smoothing to be passed onto \code{\link[equate]{presmoothing}}. (default = \code{list(3, 1)})
 #' @param boot performs bootstrapping if \code{TRUE}. (default = \code{TRUE})
 #' @param reps the number of replications to perform in bootstrapping. (default = \code{100})
+#' @param verbose if \code{TRUE}, print status messages. (default = \code{FALSE})
 #' @param ... other arguments to pass onto \code{\link[equate]{equate}}.
 #'
 #' @return \code{\link{runEquateObserved}} returns an \code{\link{equate}} object containing the test equating result.
@@ -318,11 +363,21 @@ runLinking <- function(data, method, ...) {
 #' out_eq_tscore$concordance
 #' }
 #' @export
-runEquateObserved <- function(data, scale_from = 2, scale_to = 1, type_to = "raw", rsss = NULL, eq_type = "equipercentile", smooth = "loglinear", degrees = list(3, 1), boot = TRUE, reps = 100, ...) {
+runEquateObserved <- function(
+  data,
+  scale_from = 2, scale_to = 1, type_to = "raw",
+  rsss = NULL, eq_type = "equipercentile",
+  smooth = "loglinear", degrees = list(3, 1),
+  boot = TRUE, reps = 100,
+  verbose = FALSE, ...) {
 
   validateData(data)
 
-  message("runEquateObserved requires complete data, attempting to remove cases", appendLF = TRUE)
+  printLog(
+    "sanitize",
+    "runEquateObserved() requires complete data, attempting to remove incomplete cases",
+    verbose
+  )
   data <- getCompleteData(data)
 
   scale_id       <- data@itemmap[[data@scale_id]]
@@ -341,16 +396,23 @@ runEquateObserved <- function(data, scale_from = 2, scale_to = 1, type_to = "raw
   # scale_from
 
   if (smooth != "none") {
-    message(sprintf("performing %s presmoothing on scale %i (scale_from) distribution", smooth, scale_from))
+    printLog(
+      "smooth",
+      sprintf("performing %s presmoothing on scale %i (scale_from) distribution", smooth, scale_from),
+      verbose
+    )
     freq_from <- equate::presmoothing(freq_from, smoothmethod = smooth, degrees = degrees)
   }
-
 
   # scale_to
 
   if (type_to == "tscore") {
     if (!is.null(rsss)) {
-      message(sprintf("mapping scale %i (scale_to) raw scores to t-scores using supplied rsss", scale_to))
+      printLog(
+        "map",
+        sprintf("mapping scale %i (scale_to) raw scores to t-scores using supplied rsss", scale_to),
+        verbose
+      )
       tmp <- as.data.frame(freq_to)
       tmp <- merge(
         tmp, rsss[[as.character(scale_to)]],
@@ -363,7 +425,11 @@ runEquateObserved <- function(data, scale_from = 2, scale_to = 1, type_to = "raw
   }
   if (type_to == "theta") {
     if (!is.null(rsss)) {
-      message(sprintf("mapping scale %i (scale_to) raw scores to theta using supplied rsss", scale_to))
+      printLog(
+        "map",
+        sprintf("mapping scale %i (scale_to) raw scores to theta using supplied rsss", scale_to),
+        verbose
+      )
       tmp <- as.data.frame(freq_to)
       tmp <- merge(
         tmp, rsss[[as.character(scale_to)]],
@@ -375,7 +441,11 @@ runEquateObserved <- function(data, scale_from = 2, scale_to = 1, type_to = "raw
     }
   }
   if (smooth != "none") {
-    message(sprintf("performing %s presmoothing on scale %i (scale_to) distribution", smooth, scale_to))
+    printLog(
+      "smooth",
+      sprintf("performing %s presmoothing on scale %i (scale_to) distribution", smooth, scale_to),
+      verbose
+    )
     freq_to   <- equate::presmoothing(freq_to  , smoothmethod = smooth, degrees = degrees)
   }
 

@@ -117,8 +117,6 @@ getAnchorPar <- function(d, as_AD) {
   )
   ipar <- tmp[, unique(idx)]
 
-  message(sprintf("anchor has %s items * %s parameters = %s parameters", dim(ipar)[1], dim(ipar)[2], prod(dim(ipar))))
-
   if (as_AD) {
     ipar              <- convertABtoAD(ipar)
     anchor_dim        <- getAnchorDimension(d)
@@ -201,7 +199,7 @@ getAnchorDimension <- function(d) {
 }
 
 #' @noRd
-fixParLayout <- function(par_layout, d) {
+fixParLayout <- function(par_layout, d, verbose) {
 
   if (any("a2" %in% par_layout$name)) {
     dimensions <- 2
@@ -209,7 +207,29 @@ fixParLayout <- function(par_layout, d) {
     dimensions <- 1
   }
 
-  ipar_anchor    <- getAnchorPar(d, as_AD = TRUE)
+  anchor_dim <- getAnchorDimension(d)
+
+  printLog(
+    "constraints",
+    sprintf(
+      "anchor instrument ID is %s",
+      anchor_dim
+    ),
+    verbose
+  )
+
+  ipar_anchor <- getAnchorPar(d, as_AD = TRUE)
+
+  printLog(
+    "constraints",
+    sprintf(
+      "anchor has %s items * %s parameters = %s parameters",
+      dim(ipar_anchor)[1], dim(ipar_anchor)[2],
+      prod(dim(ipar_anchor))
+    ),
+    verbose
+  )
+
   if (dimensions == 1 & (!"a1" %in% names(ipar_anchor))) {
     # if using a 1D model and the anchor dimension is not 1
     a_par_name <- sprintf("a%s", getAnchorDimension(d))
@@ -237,12 +257,22 @@ fixParLayout <- function(par_layout, d) {
     }
   }
 
+  printLog(
+    "constraints",
+    sprintf("anchor parameters applied as constraints"),
+    verbose
+  )
+
   if (dimensions == 1) {
 
     par_to_free <- which(par_layout$class == "GroupPars")
     par_layout[par_to_free, "est"] <- TRUE
 
-    message(sprintf("anchor parameters applied to par_layout"))
+    printLog(
+      "constraints",
+      "freely estimate mean(theta) and var(theta) to capture difference compared to anchor sample",
+      verbose
+    )
 
     return(par_layout)
 
@@ -263,7 +293,14 @@ fixParLayout <- function(par_layout, d) {
 
     par_layout[par_to_free, "est"] <- TRUE
 
-    message(sprintf("anchor parameters applied to par_layout"))
+    printLog(
+      "constraints",
+      sprintf(
+        "freely estimate mean(theta_%s) and var(theta_%s) to capture difference compared to anchor sample",
+        anchor_dim, anchor_dim
+      ),
+      verbose
+    )
 
     return(par_layout)
 
@@ -791,10 +828,17 @@ appendCPLA <- function(score_table, n_scale, mu_sigma) {
     tscore    <- round(theta * 10 + 50, 1)
     tscore_se <- round(theta_se * 10, 1)
 
+    n_scores <- dim(theta)[1]
+    betas <- cbind(
+      rep(beta_CPLA$beta_0, n_scores),
+      rep(beta_CPLA$beta_1, n_scores)
+    )
+
     colnames(theta)     <- sprintf("eap_dim%s", c(source_dim, target_dim))
     colnames(theta_se)  <- sprintf("eap_se_dim%s", c(source_dim, target_dim))
     colnames(tscore)    <- sprintf("tscore_dim%s", c(source_dim, target_dim))
     colnames(tscore_se) <- sprintf("tscore_se_dim%s", c(source_dim, target_dim))
+    colnames(betas)     <- sprintf("beta_%s", c(0, 1))
 
     theta     <- theta[, sort(colnames(theta))]
     theta_se  <- theta_se[, sort(colnames(theta_se))]
@@ -806,7 +850,8 @@ appendCPLA <- function(score_table, n_scale, mu_sigma) {
     o <- cbind(
       score_table[[source_dim]][, raw_name],
       tscore, tscore_se,
-      theta, theta_se
+      theta, theta_se,
+      betas
     )
     o <- as.data.frame(o)
 
@@ -828,4 +873,12 @@ sanitizeData <- function(x) {
     }
   }
   return(x)
+}
+
+#' @noRd
+printLog <- function(txt1, txt2, verbose) {
+  if (verbose) {
+    message(sprintf("%-12s| %s", txt1, txt2))
+    flush.console()
+  }
 }
