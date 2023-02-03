@@ -22,7 +22,33 @@ validateData <- function(d) {
 }
 
 #' @noRd
-getModel <- function(d, dimensions, bound_cov) {
+detectNCategories <- function(ipar) {
+  nd <- detectDimensions(ipar)
+  n_cats <- apply(ipar, 1, function(x) sum(!is.na(x)) - nd + 1)
+  return(n_cats)
+}
+
+#' (internal) construct a model
+#'
+#' \code{\link{makeCalibrationModel}} is an internal function for constructing a model.
+#'
+#' @param d a \code{\linkS4class{PROsetta_data}} object.
+#' @param dimensions the number of dimensions to use in the model. Must be \code{1} or \code{2}.
+#' If \code{1}, all instruments are modeled to be from one dimension.
+#' If \code{2}, each instrument is modeled to be from its own dimension (i.e., calibrated projection is used).
+#' @param bound_cov only used when \code{dimensions} is \code{2}.
+#' If \code{TRUE}, then constrain the between-dimension covariance to be \code{< .999}.
+#'
+#' @return \code{\link{makeCalibrationModel}} returns a \code{\link[mirt]{mirt.model}} object.
+#'
+#' @examples
+#' PROsetta:::makeCalibrationModel(data_asq, 1, FALSE)
+#' PROsetta:::makeCalibrationModel(data_asq, 1, TRUE)
+#' PROsetta:::makeCalibrationModel(data_asq, 2, FALSE)
+#' PROsetta:::makeCalibrationModel(data_asq, 2, TRUE)
+#'
+#' @keywords internal
+makeCalibrationModel <- function(d, dimensions, bound_cov) {
 
   resp_data  <- getResponse(d)
   model_text <- c()
@@ -83,47 +109,57 @@ getModel <- function(d, dimensions, bound_cov) {
 }
 
 #' @noRd
-getParLayout <- function(d, dimensions, bound_cov) {
+makeParameterLayout <- function(d, dimensions, bound_cov) {
 
-  resp_data  <- getResponse(d)
-  m          <- getModel(d, dimensions, bound_cov)
-  par_layout <- mirt(resp_data, m, itemtype = "graded", pars = "values")
+  resp_data <- getResponse(d)
+  m         <- makeCalibrationModel(d, dimensions, bound_cov)
+  layout    <- mirt(resp_data, m, itemtype = "graded", pars = "values")
 
-  return(par_layout)
+  return(layout)
 
 }
 
 #' @noRd
-getAnchorPar <- function(d, as_AD) {
+filterItemParameters <- function(ipar) {
 
   idx <- c()
-  for (j in 1:dim(d@anchor)[2]) {
-    if (inherits(d@anchor[, j], "numeric")) {
-      if (any(d@anchor[, j] != round(d@anchor[, j]), na.rm = TRUE)) {
+
+  for (j in 1:dim(ipar)[2]) {
+    if (inherits(ipar[, j], "numeric")) {
+      if (any(ipar[, j] != round(ipar[, j]), na.rm = TRUE)) {
         idx <- c(idx, j)
       }
     }
   }
 
-  tmp <- d@anchor[, idx]
+  ipar <- ipar[, idx]
 
   idx <- c(
-    grep("^a", names(tmp)),
-    grep("^b", names(tmp)),
-    grep("^c", names(tmp)),
-    grep("^d", names(tmp)),
-    grep("^a[1-9]", names(tmp)),
-    grep("^cb[1-9]", names(tmp))
+    grep("^a", names(ipar)),
+    grep("^b", names(ipar)),
+    grep("^c", names(ipar)),
+    grep("^d", names(ipar)),
+    grep("^a[1-9]", names(ipar)),
+    grep("^cb[1-9]", names(ipar))
   )
-  ipar <- tmp[, unique(idx)]
+
+  ipar <- ipar[, unique(idx)]
+
+  return(ipar)
+
+}
+
+#' @noRd
+extractAnchorParameters <- function(d, as_AD) {
+
+  ipar <- filterItemParameters(d@anchor)
+  rownames(ipar) <- d@anchor[, d@item_id]
 
   if (as_AD) {
     ipar              <- convertABtoAD(ipar)
     anchor_dim        <- getAnchorDimension(d)
     colnames(ipar)[1] <- sprintf("a%s", anchor_dim)
   }
-
-  rownames(ipar) <- d@anchor[, d@item_id]
 
   return(ipar)
 
@@ -199,9 +235,9 @@ getAnchorDimension <- function(d) {
 }
 
 #' @noRd
-fixParLayout <- function(par_layout, d, verbose) {
+applyConstraintsToLayout <- function(layout, d, verbose) {
 
-  if (any("a2" %in% par_layout$name)) {
+  if (any("a2" %in% layout$name)) {
     dimensions <- 2
   } else {
     dimensions <- 1
@@ -218,7 +254,7 @@ fixParLayout <- function(par_layout, d, verbose) {
     verbose
   )
 
-  ipar_anchor <- getAnchorPar(d, as_AD = TRUE)
+  ipar_anchor <- extractAnchorParameters(d, as_AD = TRUE)
 
   printLog(
     "constraints",
@@ -236,24 +272,24 @@ fixParLayout <- function(par_layout, d, verbose) {
     a_par_idx  <- which(names(ipar_anchor) == a_par_name)
     names(ipar_anchor)[a_par_idx] <- "a1"
   }
-  par_to_fix     <- which(par_layout$item %in% rownames(ipar_anchor))
-  n_items_to_fix <- length(unique(par_layout$item[par_to_fix]))
-  par_layout$est[par_to_fix] <- FALSE
+  par_to_fix     <- which(layout$item %in% rownames(ipar_anchor))
+  n_items_to_fix <- length(unique(layout$item[par_to_fix]))
+  layout$est[par_to_fix] <- FALSE
 
   for (i in 1:dim(ipar_anchor)[1]) {
     item_name <- rownames(ipar_anchor)[i]
     for (j in 1:dim(ipar_anchor)[2]) {
       par_name <- colnames(ipar_anchor)[j]
       idx <-
-        par_layout$item == item_name &
-        par_layout$name == par_name
+        layout$item == item_name &
+        layout$name == par_name
       if (length(which(idx)) == 0) {
-        stop(sprintf("@anchor: %s %s does not correspond to par_layout", item_name, par_name))
+        stop(sprintf("@anchor: %s %s does not correspond to layout", item_name, par_name))
       }
       if (length(which(idx)) > 2) {
-        stop(sprintf("@anchor: %s %s has multiple matches in par_layout", item_name, par_name))
+        stop(sprintf("@anchor: %s %s has multiple matches in layout", item_name, par_name))
       }
-      par_layout[idx, "value"] <- ipar_anchor[i, j]
+      layout[idx, "value"] <- ipar_anchor[i, j]
     }
   }
 
@@ -265,8 +301,8 @@ fixParLayout <- function(par_layout, d, verbose) {
 
   if (dimensions == 1) {
 
-    par_to_free <- which(par_layout$class == "GroupPars")
-    par_layout[par_to_free, "est"] <- TRUE
+    par_to_free <- which(layout$class == "GroupPars")
+    layout[par_to_free, "est"] <- TRUE
 
     printLog(
       "constraints",
@@ -274,7 +310,7 @@ fixParLayout <- function(par_layout, d, verbose) {
       verbose
     )
 
-    return(par_layout)
+    return(layout)
 
   }
 
@@ -284,14 +320,14 @@ fixParLayout <- function(par_layout, d, verbose) {
     # to capture the difference relative to anchor
     anchor_dim  <- getAnchorDimension(d)
     par_to_free <- which(
-      par_layout$class == "GroupPars" &
-      par_layout$name %in% c(
+      layout$class == "GroupPars" &
+      layout$name %in% c(
         sprintf("MEAN_%s", anchor_dim),
         sprintf("COV_%s%s", anchor_dim, anchor_dim)
       )
     )
 
-    par_layout[par_to_free, "est"] <- TRUE
+    layout[par_to_free, "est"] <- TRUE
 
     printLog(
       "constraints",
@@ -302,7 +338,7 @@ fixParLayout <- function(par_layout, d, verbose) {
       verbose
     )
 
-    return(par_layout)
+    return(layout)
 
   }
 
@@ -310,17 +346,35 @@ fixParLayout <- function(par_layout, d, verbose) {
 
 #' Compute a Crosswalk Table
 #'
-#' \code{\link{getRSSS}} is a function to generate a raw-score to standard-score crosswalk table.
+#' \code{\link{getRSSS}} is a function for generating a raw-score to standard-score crosswalk table.
 #'
 #' @param ipar an item parameter matrix for graded response items. Accepts both a/b and a/d format parameters. Accepts multidimensional item parameters.
-#' @param theta_grid the theta grid to use.
-#' @param is_minscore_0 if \code{TRUE}, the scores of each item begins from 0. if \code{FALSE}, the scores of each item begins from 1.
-#' @param prior_mu_sigma a named list containing prior distribution parameters:
+#' @param theta_grid the theta grid to use for numerical integration.
+#' @param is_minscore_0 if \code{TRUE}, the score of each item begins from 0.
+#' if \code{FALSE}, the score of each item begins from 1.
+#' @param prior_mu_sigma a named list containing prior distribution parameters. All values must be in the theta metric.
 #' \itemize{
-#'   \item{\code{mu} means}
+#'   \item{\code{mu} the prior means}
 #'   \item{\code{sigma} the covariance matrix}
-#'   \item{\code{sd} standard deviations}
+#'   \item{\code{sd} the prior standard deviations}
 #'   \item{\code{corr} the correlation matrix}
+#' }
+#'
+#' @examples
+#' \donttest{
+#' ## Free calibration without using anchor
+#'
+#' o <- runCalibration(data_asq, technical = list(NCYCLES = 1000))
+#'
+#' ipar <- mirt::coef(o, IRTpars = TRUE, simplify = TRUE)$items
+#' items <- getItemNames(data_asq, 2)
+#'
+#' getRSSS(
+#'   ipar = ipar[items, ],
+#'   theta_grid = seq(-4, 4, .1),
+#'   is_minscore_0 = TRUE,
+#'   prior_mu_sigma = list(mu = 0, sigma = 1)
+#' )
 #' }
 #' @export
 getRSSS <- function(ipar, theta_grid, is_minscore_0, prior_mu_sigma) {
@@ -329,17 +383,16 @@ getRSSS <- function(ipar, theta_grid, is_minscore_0, prior_mu_sigma) {
     theta_grid <- matrix(theta_grid)
   }
 
-  pp   <- getProb(ipar, "grm", theta_grid)
+  if (any(prior_mu_sigma$mu == 50)) {
+    message("using theta = 50.0 as prior mean.. (this is very extreme)")
+  }
 
   dimensions <- detectDimensions(ipar)
-  ni         <- dim(ipar)[1]
-  nq         <- dim(theta_grid)[1]
-  ncat       <- apply(ipar, 1, function(x) {
-    sum(!is.na(x)) - dimensions + 1
-  })
+  n_cats <- detectNCategories(ipar)
 
-  L <- LWrecursion(pp, ncat, theta_grid, is_minscore_0)
-  o <- LtoEAP(L, theta_grid, prior_mu_sigma)
+  pp <- computeResponseProbability(ipar, "grm", theta_grid)
+  L  <- LWrecursion(pp, n_cats, theta_grid, is_minscore_0)
+  o  <- LtoEAP(L, theta_grid, prior_mu_sigma)
 
   theta     <- lapply(o, function(x) x$EAP)
   theta     <- do.call(rbind, theta)
@@ -399,7 +452,7 @@ getColumn <- function(d, cn) {
 }
 
 #' @noRd
-genPrior <- function(theta_grid, dist_type, prior_mu_sigma) {
+generatePriorDensity <- function(theta_grid, dist_type, prior_mu_sigma) {
 
   if (dist_type == "normal") {
     prior <- dmvn(theta_grid, prior_mu_sigma$mu, prior_mu_sigma$sigma)
@@ -420,7 +473,18 @@ genPrior <- function(theta_grid, dist_type, prior_mu_sigma) {
   return(prior)
 }
 
-#' @noRd
+#' (internal) detect parameterization type
+#'
+#' \code{\link{detectParameterization}} is an internal function for detecting the type of parameterization used in a set of item parameters.
+#'
+#' @param ipar a \code{\link{data.frame}} containing item parameters.
+#'
+#' @return \code{\link{detectParameterization}} returns \code{ab} or \code{ad}.
+#'
+#' @examples
+#' PROsetta:::detectParameterization(data_asq@anchor) # ab
+#'
+#' @keywords internal
 detectParameterization <- function(ipar) {
   if ("b1" %in% colnames(ipar)) {
     return("ab")
@@ -433,8 +497,33 @@ detectParameterization <- function(ipar) {
   }
 }
 
-#' @noRd
-getProb <- function(ipar, model, theta_grid) {
+#' (internal) compute response probability
+#'
+#' \code{\link{computeResponseProbability}} is an internal function for computing response probability from a set of item parameters.
+#'
+#' @param ipar a \code{\link{data.frame}} containing item parameters.
+#' @param model the item model to use. Accepts \code{grm} or {gpcm}.
+#' @param theta_grid theta values to compute probability values at.
+#'
+#' @return \code{\link{computeResponseProbability}} returns an item-wise list of probability matrices.
+#'
+#' @examples
+#' ipar <- PROsetta:::extractAnchorParameters(data_asq, FALSE)
+#' theta_q <- seq(-4, 4, .1)
+#' p <- PROsetta:::computeResponseProbability(ipar, "grm", theta_q)
+#'
+#' plot(
+#'   0, 0, type = "n", xlim = c(-4, 4), ylim = c(0, 1),
+#'   xlab = "Theta", ylab = "Response probability"
+#' )
+#' lines(theta_q, p[[1]][, 1])
+#' lines(theta_q, p[[1]][, 2])
+#' lines(theta_q, p[[1]][, 3])
+#' lines(theta_q, p[[1]][, 4])
+#' lines(theta_q, p[[1]][, 5])
+#'
+#' @keywords internal
+computeResponseProbability <- function(ipar, model, theta_grid) {
 
   if (is.vector(theta_grid)) {
     theta_grid <- matrix(theta_grid)
@@ -444,10 +533,8 @@ getProb <- function(ipar, model, theta_grid) {
 
   dimensions <- detectDimensions(ipar)
   ni         <- nrow(ipar)
-  ncat       <- apply(ipar, 1, function(x) {
-    sum(!is.na(x)) - dimensions + 1
-  })
-  max_cat    <- max(ncat)
+  n_cats     <- detectNCategories(ipar)
+  max_cats   <- max(n_cats)
   nq         <- nrow(theta_grid)
 
   p_type     <- detectParameterization(ipar)
@@ -457,28 +544,24 @@ getProb <- function(ipar, model, theta_grid) {
     # a/b parameterization
     if (p_type == "ab") {
       par_a <- ipar[, 1:dimensions]
-      par_b <- ipar[, dimensions + 1:(max_cat - 1), drop = FALSE]
+      par_b <- ipar[, dimensions + 1:(max_cats - 1), drop = FALSE]
+      par_b <- as.matrix(par_b)
     }
 
     pp <- list()
     for (i in 1:ni) {
-      pp[[i]] <- matrix(NA, nq, ncat[i])
+      pp[[i]] <- matrix(NA, nq, n_cats[i])
     }
 
     if (model == "grm") {
 
       for (i in 1:ni) {
 
-        ps <- matrix(0, nq, ncat[i] + 1)
-        ps[, 1] <- 1
-        ps[, ncat[i] + 1] <- 0
-
-        for (k in 1:(ncat[i] - 1)) {
-          ps[, k + 1] <- 1 / (1 + exp(-par_a[i] * (theta_grid - par_b[i, k])))
-        }
-        for (k in 1:ncat[i]) {
-          pp[[i]][, k] <- ps[, k] - ps[, k + 1];
-        }
+        pp[[i]] <- array_p_gr(
+          theta_grid,
+          par_a[i],
+          par_b[i, 1:(n_cats[i] - 1)]
+        )
 
       }
 
@@ -489,20 +572,11 @@ getProb <- function(ipar, model, theta_grid) {
 
       for (i in 1:ni) {
 
-        cb <- unlist(par_b[i, ])
-        cb <- c(0, cb)
-        zz <- matrix(0, nq, ncat[i])
-        sdsum <- 0
-        den <- rep(0, nq)
-
-        for (k in 1:ncat[i]) {
-          sdsum <- sdsum + cb[k]
-          zz[, k] <- exp(par_a[i] * (k * theta_grid - sdsum))
-          den <- den + zz[, k]
-        }
-        for (k in 1:ncat[i]) {
-          pp[, i, k] <- zz[, k] / den
-        }
+        pp[[i]] <- array_p_gpc(
+          theta_grid,
+          par_a[i],
+          par_b[i, 1:(n_cats[i] - 1)]
+        )
 
       }
 
@@ -517,36 +591,29 @@ getProb <- function(ipar, model, theta_grid) {
     # a/d parameterization
 
     par_a <- ipar[, 1:dimensions, drop = FALSE]
-    par_d <- ipar[, dimensions + 1:(max_cat - 1), drop = FALSE]
+    par_d <- ipar[, dimensions + 1:(max_cats - 1), drop = FALSE]
+    par_a <- as.matrix(par_a)
+    par_d <- as.matrix(par_d)
 
-    ncat <- apply(par_d, 1, function(x) {
+    n_cats <- apply(par_d, 1, function(x) {
       sum(!is.na(x)) + 1
     })
-    max_cat <- max(ncat)
+    max_cats <- max(n_cats)
 
     pp <- list()
     for (i in 1:ni) {
-      pp[[i]] <- matrix(NA, nq, max_cat)
+      pp[[i]] <- matrix(NA, nq, max_cats)
     }
 
     if (model == "grm") {
 
       for (i in 1:ni) {
 
-        ps <- matrix(NA, nq, ncat[i] + 1)
-        ps[, 1] <- 1
-        ps[, ncat[i] + 1] <- 0
-
-        theta_mul <- theta_grid %*% t(par_a[i, , drop = FALSE])
-
-        for (k in 1:(ncat[i] - 1)) {
-          logit_term <- theta_mul + par_d[i, k]
-          ps[, k + 1] <- exp(logit_term) / (1 + exp(logit_term))
-        }
-
-        for (k in 1:ncat[i]) {
-          pp[[i]][, k] <- ps[, k] - ps[, k + 1];
-        }
+        pp[[i]] <- array_p_m_gr(
+          theta_grid,
+          par_a[i, , drop = FALSE],
+          par_d[i, 1:(n_cats[i] - 1), drop = FALSE]
+        )
 
       }
 
@@ -556,7 +623,15 @@ getProb <- function(ipar, model, theta_grid) {
 
     if (model == "gpcm") {
 
-      stop("multidimensional GPCM is not yet supported")
+      for (i in 1:ni) {
+
+        pp[[i]] <- array_p_m_gpc(
+          theta_grid,
+          par_a[i, , drop = FALSE],
+          par_d[i, 1:(n_cats[i] - 1), drop = FALSE]
+        )
+
+      }
 
     }
 
@@ -567,9 +642,9 @@ getProb <- function(ipar, model, theta_grid) {
 }
 
 #' @noRd
-getEscoreTheta = function(ipar, model, theta, is_minscore_0) {
+getEscoreTheta <- function(ipar, model, theta, is_minscore_0) {
 
-  pp <- getProb(ipar, "grm", theta)
+  pp <- computeResponseProbability(ipar, "grm", theta)
 
   e  <- lapply(pp, function(x) {
     sum(x * 0:(length(x) - 1))
@@ -588,7 +663,7 @@ getEscoreTheta = function(ipar, model, theta, is_minscore_0) {
 }
 
 #' @noRd
-getEAP = function(theta_grid, prior, pp, resp_data) {
+getEAP <- function(theta_grid, prior, pp, resp_data) {
 
   n  <- dim(resp_data)[1]
   ni <- dim(resp_data)[2]
@@ -622,7 +697,7 @@ getEAP = function(theta_grid, prior, pp, resp_data) {
 }
 
 #' @noRd
-getMuSigma <- function(calib) {
+extractMuSigma <- function(calib) {
 
   pars  <- mirt::coef(calib, simplify = TRUE)
   mu    <- pars$means
@@ -639,7 +714,8 @@ getMuSigma <- function(calib) {
     mu    = mu,
     sigma = sigma,
     sd    = sd_sigma,
-    corr  = corr)
+    corr  = corr
+  )
 
   return(o)
 
@@ -674,13 +750,13 @@ getThetaGrid <- function(dimensions, min_theta, max_theta, inc) {
 }
 
 #' @noRd
-LWrecursion <- function(prob_list, ncat, theta_grid, is_minscore_0) {
+LWrecursion <- function(prob_list, n_cats, theta_grid, is_minscore_0) {
 
   ni <- length(prob_list)
   nq <- dim(theta_grid)[1]
 
   min_raw_score <- 0                                 # minimum obtainable raw score
-  max_raw_score <- sum(ncat) - ni                    # maximum obtainable raw score
+  max_raw_score <- sum(n_cats) - ni                  # maximum obtainable raw score
   raw_score     <- min_raw_score:max_raw_score       # raw scores
   n_score       <- length(raw_score)                 # number of score levels
   inv_tcc       <- numeric(n_score)                  # initialize TCC scoring table
@@ -690,22 +766,22 @@ LWrecursion <- function(prob_list, ncat, theta_grid, is_minscore_0) {
 
     if (i == 1) {
 
-      ncat_i    <- ncat[1]
+      n_cats_i  <- n_cats[1]
       max_score <- 0
-      lh[, 1:ncat_i] <- prob_list[[1]][, 1:ncat_i]
-      idx <- ncat_i
+      lh[, 1:n_cats_i] <- prob_list[[1]][, 1:n_cats_i]
+      idx <- n_cats_i
 
     }
 
     if (i > 1) {
 
-      ncat_i    <- ncat[i]                    # number of categories for item i
-      max_score <- ncat_i - 1                 # maximum score for item i
-      score     <- 0:max_score                # score values for item i
-      prob      <- prob_list[[i]][, 1:ncat_i] # category probabilities for item i
-      plh       <- matrix(0, nq, n_score)     # place holder for lh
+      n_cats_i  <- n_cats[i]                    # number of categories for item i
+      max_score <- n_cats_i - 1                 # maximum score for item i
+      score     <- 0:max_score                  # score values for item i
+      prob      <- prob_list[[i]][, 1:n_cats_i] # category probabilities for item i
+      plh       <- matrix(0, nq, n_score)       # place holder for lh
 
-      for (k in 1:ncat_i) {
+      for (k in 1:n_cats_i) {
         for (h in 1:idx) {
           sco <- raw_score[h] + score[k]
           position <- which(raw_score == sco)
@@ -736,38 +812,9 @@ LtoEAP <- function(L, theta_grid, prior_mu_sigma) {
   dimensions <- dim(theta_grid)[2]
   nq         <- dim(theta_grid)[1]
 
-  prior      <- genPrior(theta_grid, "normal", prior_mu_sigma)
+  prior      <- generatePriorDensity(theta_grid, "normal", prior_mu_sigma)
   n_score    <- dim(L)[2]
-  o          <- vector("list", n_score)
-
-  for (s in 1:n_score) {
-
-    # common
-    denom <- sum(L[, s] * prior)
-
-    # EAP
-    num <- t(t(theta_grid) %*% (L[, s] * prior))
-    EAP <- num / denom
-
-    # COV
-    diff_grid <- theta_grid - matrix(EAP, nq, dimensions, byrow = TRUE)
-
-    diff_grid <- split(diff_grid, 1:nq)
-    term_V <- lapply(diff_grid, function(x) {
-      outer(x, x)
-    })
-    num <- mapply(
-      function(V, w) {V * w},
-      term_V, L[, s] * prior,
-      SIMPLIFY = FALSE
-    )
-    num <- Reduce('+', num)
-    COV <- num / denom
-
-    o[[s]]$EAP <- EAP
-    o[[s]]$COV <- COV
-
-  }
+  o <- LtoEAP_cpp(L, theta_grid, prior)
 
   return(o)
 

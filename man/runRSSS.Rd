@@ -24,11 +24,11 @@ runRSSS(
 
 \item{prior_sd}{prior standard deviation. (default = \code{1.0})}
 
-\item{min_theta}{the lower limit of theta grid. (default = \code{-4})}
+\item{min_theta}{the lower limit of theta quadratures for numerical integration. (default = \code{-4})}
 
-\item{max_theta}{the upper limit of theta grid. (default = \code{4})}
+\item{max_theta}{the upper limit of theta quadratures for numerical integration. (default = \code{4})}
 
-\item{inc}{the increment to use in theta grid. (default = \code{0.05})}
+\item{inc}{the increment between theta quadratures for numerical integration. (default = \code{0.05})}
 
 \item{min_score}{minimum item score (0 or 1) for each scale (1, 2, and combined). If a single value is supplied, the value is applied to all scales. (default = \code{1})}
 }
@@ -36,7 +36,7 @@ runRSSS(
 \code{\link{runRSSS}} returns a \code{\link{list}} containing crosswalk tables.
 }
 \description{
-\code{\link{runRSSS}} is a function to generate raw-score to standard-score crosswalk tables from supplied calibrated item parameters.
+\code{\link{runRSSS}} is a function for generating raw-score to standard-score crosswalk tables from supplied calibrated item parameters.
 }
 \examples{
 \donttest{

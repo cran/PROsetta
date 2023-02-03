@@ -1,19 +1,21 @@
-#' @include configPROsetta.R
+#' @include loading_functions.R
 NULL
 
 #' Run Calibration
 #'
-#' \code{\link{runCalibration}} is a function to perform item calibration on the response data.
+#' \code{\link{runCalibration}} is a function for performing item parameter calibration on the response data.
 #'
 #' @param data a \code{\linkS4class{PROsetta_data}} object. See \code{\link{loadData}} for loading a dataset.
-#' @param dimensions number of dimensions to use. Must be 1 or 2. If 1, use one underlying dimension for all instruments combined. If 2, use each dimension separately for the anchor instrument and the developing instrument. Covariance between dimensions is freely estimated. (default = \code{1})
+#' @param dimensions the number of dimensions to use. Must be 1 or 2.
+#' If 1, use one underlying dimension for all instruments combined.
+#' If 2, use each dimension separately for the anchor instrument and the developing instrument. Covariance between dimensions is freely estimated. (default = \code{1})
 #' @param fix_method the type of constraints to impose. (default = \code{free})
 #' \itemize{
 #'   \item{\code{item} for fixed parameter calibration using anchor item parameters}
 #'   \item{\code{theta} for using the mean and the variance obtained from a unidimensional calibration of anchor items}
 #'   \item{\code{free} for free calibration}
 #' }
-#' @param fixedpar this argument exists for reproducibility. \code{TRUE} is equivalent to \code{fix_method = "item"}, and \code{FALSE} is equivalent to \code{fix_method = "free"}.
+#' @param fixedpar this argument exists for backward compatibility. \code{TRUE} is equivalent to \code{fix_method = "item"}, and \code{FALSE} is equivalent to \code{fix_method = "free"}.
 #' @param ignore_nonconv if \code{TRUE}, return results even when calibration does not converge. If \code{FALSE}, raise an error when calibration does not converge. (default = \code{FALSE})
 #' @param verbose if \code{TRUE}, print status messages. (default = \code{FALSE})
 #' @param ... additional arguments to pass onto \code{\link[mirt]{mirt}} in \href{https://CRAN.R-project.org/package=mirt}{'mirt'} package.
@@ -42,7 +44,7 @@ runCalibration <- function(
   verbose = FALSE,
   ...) {
 
-  if (!missing("fixedpar")){
+  if (!missing("fixedpar")) {
     if (fixedpar == TRUE) {
       fix_method <- "item"
     }
@@ -74,10 +76,10 @@ runCalibration <- function(
     )
 
     bound_cov   <- FALSE
-    par_layout  <- getParLayout(data, dimensions, bound_cov)
-    par_layout  <- fixParLayout(par_layout, data, verbose)
-    model_specs <- getModel(data, dimensions, bound_cov)
-    calibration <- mirt::mirt(resp_data, model_specs, itemtype = "graded", pars = par_layout, ...)
+    layout  <- makeParameterLayout(data, dimensions, bound_cov)
+    layout  <- applyConstraintsToLayout(layout, data, verbose)
+    model_specs <- makeCalibrationModel(data, dimensions, bound_cov)
+    calibration <- mirt::mirt(resp_data, model_specs, itemtype = "graded", pars = layout, ...)
 
   } else if (toupper(fix_method) == "THETA") {
 
@@ -114,20 +116,20 @@ runCalibration <- function(
     )
 
     # Step 2. Constrain anchor dimension using 1D results
-    par_layout <- getParLayout(data, dimensions, bound_cov = FALSE)
+    layout <- makeParameterLayout(data, dimensions, bound_cov = FALSE)
 
     idx_mean <- which(
-      par_layout$class == "GroupPars" &
-      par_layout$name == sprintf("MEAN_%s", anchor_dim)
+      layout$class == "GroupPars" &
+      layout$name == sprintf("MEAN_%s", anchor_dim)
     )
-    par_layout[idx_mean, ]$value <- linked_parameters_1d$mu_sigma$mu
-    par_layout[idx_mean, ]$est   <- FALSE
+    layout[idx_mean, ]$value <- linked_parameters_1d$mu_sigma$mu
+    layout[idx_mean, ]$est   <- FALSE
     idx_var <- which(
-      par_layout$class == "GroupPars" &
-      par_layout$name == sprintf("COV_%s%s", anchor_dim, anchor_dim)
+      layout$class == "GroupPars" &
+      layout$name == sprintf("COV_%s%s", anchor_dim, anchor_dim)
     )
-    par_layout[idx_var, ]$value  <- linked_parameters_1d$mu_sigma$sigma
-    par_layout[idx_var, ]$est    <- FALSE
+    layout[idx_var, ]$value  <- linked_parameters_1d$mu_sigma$sigma
+    layout[idx_var, ]$est    <- FALSE
 
     printLog(
       "CPFIXEDDIM",
@@ -147,8 +149,8 @@ runCalibration <- function(
       ),
       verbose
     )
-    model_specs <- getModel(data, dimensions, bound_cov = FALSE)
-    calibration <- mirt::mirt(resp_data, model_specs, itemtype = "graded", pars = par_layout, ...)
+    model_specs <- makeCalibrationModel(data, dimensions, bound_cov = FALSE)
+    calibration <- mirt::mirt(resp_data, model_specs, itemtype = "graded", pars = layout, ...)
 
   } else if (toupper(fix_method) == "FREE") {
 
@@ -161,9 +163,9 @@ runCalibration <- function(
     # Free calibration uses standardized factors
     # so it makes sense to bound covariance (which is just correlation here) to be below 1
     bound_cov   <- TRUE
-    par_layout  <- getParLayout(data, dimensions, bound_cov)
-    model_specs <- getModel(data, dimensions, bound_cov)
-    calibration <- mirt::mirt(resp_data, model_specs, itemtype = "graded", pars = par_layout, ...)
+    layout      <- makeParameterLayout(data, dimensions, bound_cov)
+    model_specs <- makeCalibrationModel(data, dimensions, bound_cov)
+    calibration <- mirt::mirt(resp_data, model_specs, itemtype = "graded", pars = layout, ...)
   }
 
   if (calibration@OptimInfo$iter == calibration@Options$NCYCLES) {
@@ -180,29 +182,29 @@ runCalibration <- function(
 
 #' Run Scale Linking
 #'
-#' \code{\link{runLinking}} is a function to obtain item parameters from the response data, and perform scale linking onto the metric of supplied anchor item parameters.
+#' \code{\link{runLinking}} is a function for obtaining item parameters from the response data in the metric of supplied anchor item parameters.
 #'
 #' @param data a \code{\linkS4class{PROsetta_data}} object. See \code{\link{loadData}} for loading a dataset.
-#' @param method the type of linking to perform. Accepts:
+#' @param method the linking method to use. Accepts:
 #' \itemize{
-#'   \item{\code{MM} for mean-mean}
-#'   \item{\code{MS} for mean-sigma}
+#'   \item{\code{MM} for mean-mean method}
+#'   \item{\code{MS} for mean-sigma method}
 #'   \item{\code{HB} for Haebara method}
 #'   \item{\code{SL} for Stocking-Lord method}
 #'   \item{\code{FIXEDPAR} for fixed parameter calibration}
 #'   \item{\code{CP} for calibrated projection using fixed parameter calibration on the anchor dimension}
-#'   \item{\code{CPLA} for linear approximation of calibrated projection. This is identical to 'CP' in \code{\link{runLinking}} but uses approximation in \code{\link{runRSSS}}}
+#'   \item{\code{CPLA} for linear approximation of calibrated projection. This is identical to 'CP' but uses approximation in \code{\link{runRSSS}}}
 #'   \item{\code{CPFIXEDDIM} for calibrated projection using mean and variance constraints on the anchor dimension}
 #' }
-#' Linear transformation methods are performed with \code{\link[plink:plink-methods]{plink}} in \href{https://CRAN.R-project.org/package=plink}{'plink'} package.
+#' Linear transformation methods (i.e., MM, MS, HB, SL) are performed with \code{\link[plink:plink-methods]{plink}} in \href{https://CRAN.R-project.org/package=plink}{'plink'} package.
 #'
 #' @param verbose if \code{TRUE}, print status messages. (default = \code{FALSE})
 #' @param ... additional arguments to pass onto \code{\link[mirt]{mirt}} in \href{https://CRAN.R-project.org/package=mirt}{'mirt'} package.
 #'
 #' @return \code{\link{runLinking}} returns a \code{\link{list}} containing the scale linking results.
 #' \itemize{
-#'   \item{\code{constants}} linear transformation constants. \code{NA} if \code{method} argument was \code{FIXEDPAR}.
-#'   \item{\code{ipar_linked}} item parameters calibrated to the response data, and linked to the anchor item parameters.
+#'   \item{\code{constants}} linear transformation constants. Only available when linear transformation methods were used (i.e., MM, MS, HB, SL).
+#'   \item{\code{ipar_linked}} item parameters calibrated to the response data, and linked to the metric of anchor item parameters.
 #'   \item{\code{ipar_anchor}} anchor item parameters used in linking.
 #' }
 #' @examples
@@ -225,18 +227,21 @@ runLinking <- function(data, method, verbose = FALSE, ...) {
     stop(sprintf("argument 'method': unrecognized value '%s' (accepts 'MM', 'MS', 'HB', 'SL', 'FIXEDPAR', 'CP', 'CPLA', 'CPFIXEDDIM')", method))
   }
 
+  if (method %in% c("MM", "MS", "HB", "SL")) {
+    dimensions <- 1
+    fix_method <- "free"
+  }
+  if (method == "FIXEDPAR") {
+    dimensions <- 1
+    fix_method <- "item"
+  }
   if (method %in% c("CP", "CPLA")) {
     dimensions <- 2
     fix_method <- "item"
-  } else if (method == "CPFIXEDDIM") {
+  }
+  if (method == "CPFIXEDDIM") {
     dimensions <- 2
     fix_method <- "theta"
-  } else if (method == "FIXEDPAR") {
-    dimensions <- 1
-    fix_method <- "item"
-  } else {
-    dimensions <- 1
-    fix_method <- "free"
   }
 
   calibration <- runCalibration(data, dimensions = dimensions, fix_method = fix_method, verbose = verbose, ...)
@@ -247,15 +252,15 @@ runLinking <- function(data, method, verbose = FALSE, ...) {
     ipar      <- fit$items
     ni_all    <- nrow(ipar)
     ni_anchor <- nrow(data@anchor)
-    max_cat   <- max(getColumn(data@anchor, "ncat"))
+    ipar_anchor     <- extractAnchorParameters(data, FALSE)
+    n_cats_anchor   <- detectNCategories(ipar_anchor)
+    max_cats_anchor <- max(n_cats_anchor)
     id_new <- data.frame(New = 1:ni_all   , ID = data@itemmap[[data@item_id]])
     id_old <- data.frame(Old = 1:ni_anchor, ID = data@anchor[[data@item_id]])
     common <- merge(id_new, id_old, by = "ID", sort = FALSE)[c("New", "Old")]
-    pars <- vector("list", 2)
-    pars[[1]] <- ipar
-    pars[[2]] <- data@anchor[c("a", paste0("cb", 1:(max_cat - 1)))]
+    
+    if (method %in% c("MM", "MS", "HB", "SL")) {
 
-    if (fix_method == "free") {
       printLog(
         "metric",
         "applying linear transformation on item parameters to match the metric of anchor data parameters",
@@ -266,27 +271,39 @@ runLinking <- function(data, method, verbose = FALSE, ...) {
         sprintf("linear transformation method is %s", method),
         verbose
       )
+
       pm_all    <- plink::as.poly.mod(ni_all   , "grm", 1:ni_all)
       pm_anchor <- plink::as.poly.mod(ni_anchor, "grm", 1:ni_anchor)
-      ncat <- list(
+      n_cats <- list(
         getColumn(data@itemmap, "ncat"),
-        getColumn(data@anchor, "ncat")
+        n_cats_anchor
       )
+
+      pars <- vector("list", 2)
+      pars[[1]] <- ipar
+      pars[[2]] <- data@anchor[c("a", paste0("cb", 1:(max_cats_anchor - 1)))]
+
       plink_pars <- plink::as.irt.pars(
-        pars, common, cat = ncat,
+        pars, common, cat = n_cats,
         list(pm_all, pm_anchor),
         grp.names = c("From", "To")
       )
+
       out <- plink::plink(plink_pars, rescale = method, base.grp = 2)
       out$constants <- out$link@constants[[method]]
       out$ipar_linked <- out$pars@pars$From
       out$ipar_anchor <- out$pars@pars$To
-    } else {
+
+    }
+
+    if (method == "FIXEDPAR") {
+
       out <- list()
       out$constants <- NA
-      out$ipar_linked <- pars[[1]]
-      out$ipar_anchor <- pars[[2]]
-      out$mu_sigma    <- getMuSigma(calibration)
+      out$ipar_linked <- ipar
+      out$ipar_anchor <- extractAnchorParameters(data, as_AD = FALSE)
+      out$mu_sigma    <- extractMuSigma(calibration)
+
     }
 
     out$method      <- method
@@ -306,8 +323,8 @@ runLinking <- function(data, method, verbose = FALSE, ...) {
     out <- list()
     out$constants   <- NA
     out$ipar_linked <- pars$items
-    out$ipar_anchor <- getAnchorPar(data, as_AD = TRUE)
-    out$mu_sigma    <- getMuSigma(calibration)
+    out$ipar_anchor <- extractAnchorParameters(data, as_AD = TRUE)
+    out$mu_sigma    <- extractMuSigma(calibration)
     out$method      <- method
 
     return(out)
@@ -318,7 +335,8 @@ runLinking <- function(data, method, verbose = FALSE, ...) {
 
 #' Run Test Equating
 #'
-#' \code{\link{runEquateObserved}} is a function to perform equipercentile test equating between two scales. A concordance table is produced, mapping the observed raw scores from one scale to the scores from another scale.
+#' \code{\link{runEquateObserved}} is a function for performing equipercentile equating between two scales.
+#' \code{\link{runEquateObserved}} also produces a concordance table, mapping the observed raw scores from one scale to the scores from another scale.
 #'
 #' @param data a \code{\linkS4class{PROsetta_data}} object. See \code{\link{loadData}} for loading a dataset.
 #' @param scale_from the scale ID of the input scale. References to \code{itemmap} in \code{data} argument. (default = \code{2})
@@ -392,7 +410,6 @@ runEquateObserved <- function(
   freq_from      <- equate::freqtab(scores_from)
   freq_to        <- equate::freqtab(scores_to)
 
-
   # scale_from
 
   if (smooth != "none") {
@@ -465,15 +482,15 @@ runEquateObserved <- function(
 
 #' Compute Crosswalk Tables
 #'
-#' \code{\link{runRSSS}} is a function to generate raw-score to standard-score crosswalk tables from supplied calibrated item parameters.
+#' \code{\link{runRSSS}} is a function for generating raw-score to standard-score crosswalk tables from supplied calibrated item parameters.
 #'
 #' @param data a \code{\linkS4class{PROsetta_data}} object. See \code{\link{loadData}} for loading a dataset.
 #' @param ipar_linked an object returned from \code{\link{runLinking}} or \code{\link{runCalibration}}.
 #' @param prior_mean prior mean. (default = \code{0.0})
 #' @param prior_sd prior standard deviation. (default = \code{1.0})
-#' @param min_theta the lower limit of theta grid. (default = \code{-4})
-#' @param max_theta the upper limit of theta grid. (default = \code{4})
-#' @param inc the increment to use in theta grid. (default = \code{0.05})
+#' @param min_theta the lower limit of theta quadratures for numerical integration. (default = \code{-4})
+#' @param max_theta the upper limit of theta quadratures for numerical integration. (default = \code{4})
+#' @param inc the increment between theta quadratures for numerical integration. (default = \code{0.05})
 #' @param min_score minimum item score (0 or 1) for each scale (1, 2, and combined). If a single value is supplied, the value is applied to all scales. (default = \code{1})
 #'
 #' @return \code{\link{runRSSS}} returns a \code{\link{list}} containing crosswalk tables.
@@ -485,7 +502,10 @@ runEquateObserved <- function(
 #' }
 #'
 #' @export
-runRSSS <- function(data, ipar_linked, prior_mean = 0.0, prior_sd = 1.0, min_theta = -4.0, max_theta = 4.0, inc = 0.05, min_score = 1) {
+runRSSS <- function(
+  data, ipar_linked, prior_mean = 0.0, prior_sd = 1.0,
+  min_theta = -4.0, max_theta = 4.0, inc = 0.05, min_score = 1
+) {
 
   validateData(data)
 
@@ -498,7 +518,7 @@ runRSSS <- function(data, ipar_linked, prior_mean = 0.0, prior_sd = 1.0, min_the
   } else if (isS4(ipar_linked) && attr(class(ipar_linked), "package") == "mirt") {
 
     item_par    <- mirt::coef(ipar_linked, IRTpars = FALSE, simplify = TRUE)$items
-    mu_sigma    <- getMuSigma(ipar_linked)
+    mu_sigma    <- extractMuSigma(ipar_linked)
     link_method <- "FREE"
 
   }

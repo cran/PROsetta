@@ -9,18 +9,36 @@ getRSSS(ipar, theta_grid, is_minscore_0, prior_mu_sigma)
 \arguments{
 \item{ipar}{an item parameter matrix for graded response items. Accepts both a/b and a/d format parameters. Accepts multidimensional item parameters.}
 
-\item{theta_grid}{the theta grid to use.}
+\item{theta_grid}{the theta grid to use for numerical integration.}
 
-\item{is_minscore_0}{if \code{TRUE}, the scores of each item begins from 0. if \code{FALSE}, the scores of each item begins from 1.}
+\item{is_minscore_0}{if \code{TRUE}, the score of each item begins from 0.
+if \code{FALSE}, the score of each item begins from 1.}
 
-\item{prior_mu_sigma}{a named list containing prior distribution parameters:
+\item{prior_mu_sigma}{a named list containing prior distribution parameters. All values must be in the theta metric.
 \itemize{
-  \item{\code{mu} means}
+  \item{\code{mu} the prior means}
   \item{\code{sigma} the covariance matrix}
-  \item{\code{sd} standard deviations}
+  \item{\code{sd} the prior standard deviations}
   \item{\code{corr} the correlation matrix}
 }}
 }
 \description{
-\code{\link{getRSSS}} is a function to generate a raw-score to standard-score crosswalk table.
+\code{\link{getRSSS}} is a function for generating a raw-score to standard-score crosswalk table.
+}
+\examples{
+\donttest{
+## Free calibration without using anchor
+
+o <- runCalibration(data_asq, technical = list(NCYCLES = 1000))
+
+ipar <- mirt::coef(o, IRTpars = TRUE, simplify = TRUE)$items
+items <- getItemNames(data_asq, 2)
+
+getRSSS(
+  ipar = ipar[items, ],
+  theta_grid = seq(-4, 4, .1),
+  is_minscore_0 = TRUE,
+  prior_mu_sigma = list(mu = 0, sigma = 1)
+)
+}
 }

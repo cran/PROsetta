@@ -3,14 +3,13 @@ NULL
 
 #' PROsetta
 #'
-#' \code{\link{PROsetta}} is a caller function to launch a Shiny app locally.
+#' \code{\link{PROsetta}} is a caller function for launching a Shiny app locally.
 #'
 #' @examples
 #' if (interactive()) {
 #'   PROsetta()
 #' }
 #'
-#' @aliases guiPROsetta
 #' @export
 PROsetta <- function() {
   app_dir <- system.file("shiny", package = "PROsetta")
@@ -40,10 +39,4 @@ PROsetta <- function() {
     }
     shiny::runApp(app_dir, display.mode = "normal", launch.browser = TRUE)
   }
-}
-
-#' @rdname PROsetta
-guiPROsetta <- function() {
-  .Deprecated("PROsetta", msg = "guiPROsetta() is deprecated. Use PROsetta() instead.")
-  PROsetta()
 }

@@ -11,11 +11,18 @@ compareScores(left, right, type = c("corr", "mean", "sd", "rmsd", "mad"))
 
 \item{right}{scores on the right side of comparison. This is subtracted from 'left'.}
 
-\item{type}{type of comparisons to include. Accepts '\code{corr}', "\code{mean}', '\code{sd}', '\code{rmsd}'. Defaults to all four.}
+\item{type}{type of comparisons to include. Accepts \code{corr}, \code{mean}, \code{sd}, \code{rmsd}, \code{mad}. Defaults to all types.}
 }
 \value{
 \code{\link{compareScores}} returns a \code{\link{data.frame}} containing the comparison results.
 }
 \description{
-\code{\link{compareScores}} is a helper function to compare two sets of scores.
+\code{\link{compareScores}} is a helper function for comparing two sets of scores.
+}
+\examples{
+set.seed(1)
+true_theta <- rnorm(100)
+theta_est <- true_theta + rnorm(100, 0, 0.3)
+compareScores(theta_est, true_theta)
+
 }

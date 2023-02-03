@@ -1,66 +1,36 @@
-#' @include configPROsetta.R
+#' @include loading_functions.R
 NULL
 
-#' Get complete data
+#' Obtain theta estimates
 #'
-#' \code{\link{getCompleteData}} is a helper function to perform casewise deletion of missing values.
-#'
-#' @param data a \code{\linkS4class{PROsetta_data}} object.
-#' @param scale the index of the scale to perform casewise deletion. Leave empty or set to "combined" to perform on all scales.
-#' @param verbose if \code{TRUE}, print status messages. (default = \code{FALSE})
-#'
-#' @export
-getCompleteData <- function(data, scale = NULL, verbose = FALSE) {
-
-  validateData(data)
-
-  if (is.null(scale)) {
-    scale <- "combined"
-  }
-
-  if (scale == "combined") {
-    items <- data@itemmap[[data@item_id]]
-    scale_text <- sprintf("all scales")
-  } else {
-    idx   <- data@itemmap[[data@scale_id]] == scale
-    items <- data@itemmap[[data@item_id]][idx]
-    scale_text <- sprintf("Scale %s", scale)
-  }
-
-  resp_with_missing_values <- apply(is.na(data@response[, items]), 1, any)
-  n_resp <- sum(resp_with_missing_values)
-
-  if (any(resp_with_missing_values)) {
-    data@response <- data@response[!resp_with_missing_values, ]
-    printLog(
-      "sanitize",
-      sprintf("getCompleteData() removed %s cases with missing responses in %s", n_resp, scale_text),
-      verbose
-    )
-  } else {
-    printLog(
-      "sanitize",
-      sprintf("getCompleteData() did not remove any cases because all %i responses are complete in %s", dim(data@response)[1], scale_text),
-      verbose
-    )
-  }
-  return(data)
-}
-
-#' Obtain EAP estimates
-#'
-#' \code{\link{getTheta}} is a helper function to calculate EAP estimates.
+#' \code{\link{getTheta}} is a helper function for obtaining theta estimates.
+#' Estimates are obtained using an \emph{expected a posteriori} (EAP) method.
 #'
 #' @param data a \code{\linkS4class{PROsetta_data}} object.
 #' @param ipar a \code{\link{data.frame}} containing item parameters.
-#' @param scale the index of the scale to use. Set to 'combined' to use the combined scale.
-#' @param model the item model to use. Accepts 'grm' or 'gpcm'.
-#' @param theta_grid the theta grid to use in calculating EAP estimates.
-#' @param prior_dist the type of prior distribution. Accepts '\code{normal}' or '\code{logistic}'.
-#' @param prior_mean mean of the prior distribution.
-#' @param prior_sd SD of the prior distribution.
+#' @param scale the index of the scale to use. \code{combined} refers to the combined scale. (default = \code{combined})
+#' @param model the item model to use. Accepts \code{grm} or \code{gpcm}. (default = \code{grm})
+#' @param theta_grid the theta grid to use for numerical integration. (default = \code{seq(-4, 4, .1)})
+#' @param prior_dist the type of prior distribution. Accepts \code{normal} or \code{logistic}. (default = \code{normal})
+#' @param prior_mean mean of the prior distribution. (default = \code{0.0})
+#' @param prior_sd SD of the prior distribution. (default = \code{1.0})
 #'
 #' @return \code{\link{getTheta}} returns a \code{\link{list}} containing EAP estimates.
+#'
+#' @examples
+#' x <- runLinking(data_asq, method = "FIXEDPAR")
+#'
+#' o <- getTheta(data_asq, x$ipar_linked, scale = 1)
+#' o$theta
+#' o$item_idx
+#'
+#' o <- getTheta(data_asq, x$ipar_linked, scale = 2)
+#' o$theta
+#' o$item_idx
+#'
+#' o <- getTheta(data_asq, x$ipar_linked, scale = "combined")
+#' o$theta
+#' o$item_idx
 #'
 #' @export
 getTheta <- function(
@@ -68,7 +38,8 @@ getTheta <- function(
   theta_grid = seq(-4, 4, .1),
   prior_dist = "normal",
   prior_mean = 0.0,
-  prior_sd = 1.0) {
+  prior_sd = 1.0
+) {
 
   resp_data <- getCompleteData(data, scale)@response
 
@@ -92,11 +63,10 @@ getTheta <- function(
   prior_mu_sigma$mu    <- prior_mean
   prior_mu_sigma$sigma <- prior_sd ** 2
 
-  prior <- genPrior(theta_grid, prior_dist, prior_mu_sigma)
-  pp    <- getProb(ipar, model, theta_grid)
+  prior <- generatePriorDensity(theta_grid, prior_dist, prior_mu_sigma)
+  pp    <- computeResponseProbability(ipar, model, theta_grid)
   eap   <- getEAP(theta_grid, prior, pp, resp_data)
   eap   <- cbind(person_id, eap)
-
 
 	out <- list()
 	out$theta    <- eap
@@ -109,7 +79,7 @@ getTheta <- function(
 
 #' Calculate expected scores at theta
 #'
-#' \code{\link{getEscore}} is a helper function to calculate expected scores at supplied thetas.
+#' \code{\link{getEscore}} is a helper function for obtaining expected scores at supplied thetas.
 #'
 #' @param ipar item parameters.
 #' @param model item model to use.
@@ -131,10 +101,14 @@ getEscore <- function(ipar, model, theta, is_minscore_0) {
 
 #' Calculate raw sum scores of a scale
 #'
-#' \code{\link{getScaleSum}} is a helper function to calculate raw sum scores of a scale.
+#' \code{\link{getScaleSum}} is a helper function for calculating instrument-wise raw sum scores from response data.
 #'
 #' @param data a \code{\linkS4class{PROsetta_data}} object.
-#' @param scale_idx the index of the scale to obtain the raw sum scores.
+#' @param scale_idx the instrument index to obtain the raw sum scores.
+#'
+#' @examples
+#' getScaleSum(data_asq, 1)
+#' getScaleSum(data_asq, 2)
 #'
 #' @export
 getScaleSum <- function(data, scale_idx) {
@@ -148,16 +122,24 @@ getScaleSum <- function(data, scale_idx) {
 
 #' Compare two sets of scores
 #'
-#' \code{\link{compareScores}} is a helper function to compare two sets of scores.
+#' \code{\link{compareScores}} is a helper function for comparing two sets of scores.
 #'
 #' @param left scores on the left side of comparison.
 #' @param right scores on the right side of comparison. This is subtracted from 'left'.
-#' @param type type of comparisons to include. Accepts '\code{corr}', "\code{mean}', '\code{sd}', '\code{rmsd}'. Defaults to all four.
+#' @param type type of comparisons to include. Accepts \code{corr}, \code{mean}, \code{sd}, \code{rmsd}, \code{mad}. Defaults to all types.
 #'
 #' @return \code{\link{compareScores}} returns a \code{\link{data.frame}} containing the comparison results.
 #'
+#' @examples
+#' set.seed(1)
+#' true_theta <- rnorm(100)
+#' theta_est <- true_theta + rnorm(100, 0, 0.3)
+#' compareScores(theta_est, true_theta)
+#'
 #' @export
-compareScores <- function(left, right, type = c("corr", "mean", "sd", "rmsd", "mad")) {
+compareScores <- function(
+  left, right, type = c("corr", "mean", "sd", "rmsd", "mad")
+) {
 
   out <- list()
   if ("corr" %in% type) {

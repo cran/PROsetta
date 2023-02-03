@@ -1,3 +1,15 @@
+# PROsetta 0.4.1
+
+* Now requires `TestDesign (>= 1.5.1)`.
+* Response probabilities are now computed faster using cpp functions.
+* Deprecated `guiPROsetta()` is removed. Use `PROsetta()` instead.
+* Updated documentation.
+* Made minor updates to the Shiny app in `PROsetta()`.
+* Removed `ncat` column in anchor parameters. This is now inferred from the number of parameters.
+* Added cpp routine for EAP computation after Lord-Wingersky recursion. This improves the speed of `runRSSS()`.
+* `getRSSS()` now nudges the user if the prior mean input looks like a T-score, which should be entered in the theta metric.
+* Updated CITATION to use `bibentry()` to meet CRAN requirements.
+
 # PROsetta 0.3.5
 
 * `runRSSS()` output now includes linear approximation betas when the `CPLA` method is used.
@@ -14,10 +26,6 @@
 * Fixed where `runLinking(method = "FIXEDPAR")` was not working when the anchor instrument ID was not 1 in item map.
 * Fixed where `runLinking(method = "FIXEDPAR")` was not working when the anchor and target instruments had different numbers of categories in response data.
 * Fixed where `runFrequency()` was not sorting categories correctly when the number of categories was 10 or above.
-
-# PROsetta 0.3.1
-
-## Bug fixes
 * Fixed where `runCalibration(fixedpar = TRUE)` was not reading anchor parameters correctly when an integer value existed in anchor parameters.
 * Fixed where item parameters for dichotomous items were triggering an error while being parsed.
 * For compatibility with R < 4.0, `loadData()` now sanitizes input data when a data frame is supplied.
